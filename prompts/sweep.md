@@ -50,6 +50,11 @@ For each item in the `dispatch` array, execute the appropriate agent action:
 2. No action needed beyond acknowledgment
 3. Record: `agent=calendar, action_type=acknowledged, output_summary=<brief note>`
 
+**Feed (domain_type = "feed"):**
+1. Read the feed title and content excerpt from `detail`
+2. If actionable, write a brief note to relevant folder
+3. Record: `agent=content, action_type=summary_generated, external_ref=<feed url from extra>, output_summary=<summary>`
+
 ### Step 3: Process PREP items
 
 For each item in the `prep` array, do 80% of the work:

@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS classifications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cls_queue ON classifications(queue_id);
+CREATE INDEX IF NOT EXISTS idx_cls_queue_latest ON classifications(queue_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cls_category ON classifications(category);
 
 -- ============================================================
@@ -171,46 +172,49 @@ CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
 -- Views
 -- ============================================================
 
--- Active items: pending or in-progress, last 3 days
-CREATE VIEW IF NOT EXISTS v_active_queue AS
+-- Base view: work queue items enriched with domain-specific fields.
+-- All domain JOINs and CASE mappings live here ONCE.
+-- Consumers add their own WHERE/GROUP BY on top.
+CREATE VIEW IF NOT EXISTS v_queue_enriched AS
     SELECT
         wq.id AS queue_id,
         wq.domain_type,
         wq.domain_id,
         wq.priority,
         wq.status,
+        wq.content_hash,
         wq.collected_at,
-        c.category AS classification,
-        c.reason AS classification_reason
-    FROM work_queue wq
-    LEFT JOIN classifications c ON c.id = (
-        SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
-    )
-    WHERE wq.status NOT IN ('done', 'skipped')
-    AND wq.collected_at >= datetime('now', '-3 days');
-
--- Today's briefing data
-CREATE VIEW IF NOT EXISTS v_today_briefing AS
-    SELECT
-        wq.id AS queue_id,
-        wq.domain_type,
-        wq.domain_id,
-        wq.priority,
-        wq.status,
-        c.category AS classification,
+        wq.processed_at,
+        c.category,
         c.reason,
         CASE wq.domain_type
             WHEN 'email' THEN e.subject
             WHEN 'event' THEN ev.summary
             WHEN 'task' THEN t.content
             WHEN 'health' THEN h.project || ': ' || h.status
+            WHEN 'feed' THEN f.title
         END AS title,
         CASE wq.domain_type
             WHEN 'email' THEN e.sender
             WHEN 'event' THEN ev.calendar_id
             WHEN 'task' THEN t.project
             WHEN 'health' THEN h.project
-        END AS context
+            WHEN 'feed' THEN f.feed_title
+        END AS context,
+        CASE wq.domain_type
+            WHEN 'email' THEN e.snippet
+            WHEN 'event' THEN ev.location
+            WHEN 'task' THEN t.file_path
+            WHEN 'health' THEN h.last_error
+            WHEN 'feed' THEN substr(f.content, 1, 200)
+        END AS detail,
+        CASE wq.domain_type
+            WHEN 'email' THEN e.thread_id
+            WHEN 'event' THEN ev.start_time
+            WHEN 'task' THEN t.due_date
+            WHEN 'health' THEN h.checked_at
+            WHEN 'feed' THEN f.url
+        END AS extra
     FROM work_queue wq
     LEFT JOIN classifications c ON c.id = (
         SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
@@ -219,29 +223,28 @@ CREATE VIEW IF NOT EXISTS v_today_briefing AS
     LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
     LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
     LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-    WHERE date(wq.collected_at) = date('now');
+    LEFT JOIN feeds f ON wq.domain_type = 'feed' AND wq.domain_id = f.id;
+
+-- Active items: pending or in-progress, last 3 days
+CREATE VIEW IF NOT EXISTS v_active_queue AS
+    SELECT queue_id, domain_type, domain_id, priority, status, collected_at,
+           category AS classification, reason AS classification_reason
+    FROM v_queue_enriched
+    WHERE status NOT IN ('done', 'skipped')
+    AND collected_at >= datetime('now', '-3 days');
+
+-- Today's briefing data
+CREATE VIEW IF NOT EXISTS v_today_briefing AS
+    SELECT queue_id, domain_type, domain_id, priority, status,
+           category AS classification, reason, title, context
+    FROM v_queue_enriched
+    WHERE date(collected_at) = date('now');
 
 -- Today's classified summary
 CREATE VIEW IF NOT EXISTS v_today_classified AS
-    SELECT
-        c.category AS classification,
-        COUNT(*) AS count,
-        GROUP_CONCAT(
-            CASE wq.domain_type
-                WHEN 'email' THEN e.subject
-                WHEN 'event' THEN ev.summary
-                WHEN 'task' THEN t.content
-                WHEN 'health' THEN h.project
-            END,
-            ', '
-        ) AS titles
-    FROM work_queue wq
-    JOIN classifications c ON c.id = (
-        SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
-    )
-    LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-    LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-    LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-    LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-    WHERE date(wq.collected_at) = date('now')
-    GROUP BY c.category;
+    SELECT category AS classification, COUNT(*) AS count,
+           GROUP_CONCAT(title, ', ') AS titles
+    FROM v_queue_enriched
+    WHERE date(collected_at) = date('now')
+    AND category IS NOT NULL
+    GROUP BY category;

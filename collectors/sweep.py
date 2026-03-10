@@ -39,51 +39,15 @@ def export_sweep_items(config: dict) -> dict:
 
     with connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT
-                   wq.id AS queue_id,
-                   wq.domain_type,
-                   wq.domain_id,
-                   wq.priority,
-                   wq.status AS queue_status,
-                   c.category,
-                   c.reason,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.subject
-                       WHEN 'event' THEN ev.summary
-                       WHEN 'task' THEN t.content
-                       WHEN 'health' THEN h.project || ': ' || h.status
-                   END AS title,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.sender
-                       WHEN 'event' THEN ev.calendar_id
-                       WHEN 'task' THEN t.project
-                       WHEN 'health' THEN h.project
-                   END AS context,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.snippet
-                       WHEN 'event' THEN ev.location
-                       WHEN 'task' THEN t.file_path
-                       WHEN 'health' THEN h.last_error
-                   END AS detail,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.thread_id
-                       WHEN 'event' THEN ev.start_time
-                       WHEN 'task' THEN t.due_date
-                       WHEN 'health' THEN h.checked_at
-                   END AS extra
-               FROM work_queue wq
-               JOIN classifications c ON c.id = (
-                   SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
-               )
-               LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-               LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-               LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-               LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-               WHERE wq.status = 'classified'
-               AND c.category IN ('dispatch', 'prep')
+            """SELECT queue_id, domain_type, domain_id, priority,
+                   status AS queue_status, category, reason,
+                   title, context, detail, extra
+               FROM v_queue_enriched
+               WHERE status = 'classified'
+               AND category IN ('dispatch', 'prep')
                ORDER BY
-                   CASE c.category WHEN 'dispatch' THEN 0 WHEN 'prep' THEN 1 END,
-                   wq.priority, wq.collected_at"""
+                   CASE category WHEN 'dispatch' THEN 0 WHEN 'prep' THEN 1 END,
+                   priority, collected_at"""
         ).fetchall()
 
     grouped = {"dispatch": [], "prep": []}
@@ -102,36 +66,12 @@ def export_yours_items(config: dict) -> list[dict]:
 
     with connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT
-                   wq.id AS queue_id,
-                   wq.domain_type,
-                   wq.domain_id,
-                   wq.priority,
-                   c.category,
-                   c.reason,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.subject
-                       WHEN 'event' THEN ev.summary
-                       WHEN 'task' THEN t.content
-                       WHEN 'health' THEN h.project || ': ' || h.status
-                   END AS title,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.sender
-                       WHEN 'event' THEN ev.calendar_id
-                       WHEN 'task' THEN t.project
-                       WHEN 'health' THEN h.project
-                   END AS context
-               FROM work_queue wq
-               JOIN classifications c ON c.id = (
-                   SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
-               )
-               LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-               LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-               LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-               LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-               WHERE wq.status = 'classified'
-               AND c.category = 'yours'
-               ORDER BY wq.priority, wq.collected_at"""
+            """SELECT queue_id, domain_type, domain_id, priority,
+                   category, reason, title, context
+               FROM v_queue_enriched
+               WHERE status = 'classified'
+               AND category = 'yours'
+               ORDER BY priority, collected_at"""
         ).fetchall()
 
     return [dict(row) for row in rows]

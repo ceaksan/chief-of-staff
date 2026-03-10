@@ -40,45 +40,12 @@ def export_pending(config: dict) -> list[dict]:
 
     with connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT
-                   wq.id AS queue_id,
-                   wq.domain_type,
-                   wq.domain_id,
-                   wq.priority,
-                   wq.status,
-                   wq.content_hash,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.subject
-                       WHEN 'event' THEN ev.summary
-                       WHEN 'task' THEN t.content
-                       WHEN 'health' THEN h.project || ': ' || h.status
-                       WHEN 'feed' THEN f.title
-                   END AS title,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.sender
-                       WHEN 'event' THEN ev.calendar_id
-                       WHEN 'task' THEN t.project
-                       WHEN 'health' THEN h.project
-                       WHEN 'feed' THEN f.feed_title
-                   END AS context,
-                   CASE wq.domain_type
-                       WHEN 'email' THEN e.snippet
-                       WHEN 'event' THEN ev.location
-                       WHEN 'task' THEN t.file_path
-                       WHEN 'health' THEN h.last_error
-                       WHEN 'feed' THEN substr(f.content, 1, 200)
-                   END AS detail
-               FROM work_queue wq
-               LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-               LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-               LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-               LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-               LEFT JOIN feeds f ON wq.domain_type = 'feed' AND wq.domain_id = f.id
-               WHERE wq.status = 'pending'
-               AND NOT EXISTS (
-                   SELECT 1 FROM classifications c WHERE c.queue_id = wq.id
-               )
-               ORDER BY wq.priority, wq.collected_at"""
+            """SELECT queue_id, domain_type, domain_id, priority, status,
+                   content_hash, title, context, detail
+               FROM v_queue_enriched
+               WHERE status = 'pending'
+               AND category IS NULL
+               ORDER BY priority, collected_at"""
         ).fetchall()
 
     return [dict(row) for row in rows]

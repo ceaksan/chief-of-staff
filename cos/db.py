@@ -321,3 +321,49 @@ def get_active_queue(conn: sqlite3.Connection) -> list[dict]:
     return [
         dict(row) for row in conn.execute("SELECT * FROM v_active_queue").fetchall()
     ]
+
+
+def cleanup(conn: sqlite3.Connection, days: int = 30) -> dict:
+    """Purge completed/skipped items older than N days and their related records.
+
+    Actions and classifications are deleted via ON DELETE CASCADE when
+    work_queue rows are removed.
+    """
+    cutoff = f"-{days} days"
+    stats = {}
+
+    # Delete old work queue entries (cascades to actions + classifications)
+    cursor = conn.execute(
+        """DELETE FROM work_queue
+           WHERE status IN ('done', 'skipped', 'failed')
+           AND collected_at < datetime('now', ?)""",
+        (cutoff,),
+    )
+    stats["work_queue"] = cursor.rowcount
+
+    # Delete orphaned domain records
+    _DOMAIN_TABLES = {
+        "emails": "email",
+        "events": "event",
+        "tasks": "task",
+        "health_checks": "health",
+        "feeds": "feed",
+    }
+    for table, dtype in _DOMAIN_TABLES.items():
+        assert table.isidentifier(), f"Invalid table name: {table}"
+        cursor = conn.execute(
+            f"""DELETE FROM {table} WHERE id NOT IN (
+                    SELECT domain_id FROM work_queue WHERE domain_type = ?
+                )""",
+            (dtype,),
+        )
+        stats[table] = cursor.rowcount
+
+    # Delete old runs
+    cursor = conn.execute(
+        "DELETE FROM runs WHERE started_at < datetime('now', ?)",
+        (cutoff,),
+    )
+    stats["runs"] = cursor.rowcount
+
+    return stats

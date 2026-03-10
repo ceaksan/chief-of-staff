@@ -13,20 +13,16 @@ if [ -z "$NOTE" ]; then
     exit 1
 fi
 
-cat <<EOF | claude -p -
-# Daily Brief
+PROMPT_TEMPLATE="$COS_DIR/prompts/brief.md"
 
-Asagidaki daily note icerigini Turkce ozetle.
+if [ ! -f "$PROMPT_TEMPLATE" ]; then
+    echo "Error: prompt template not found: $PROMPT_TEMPLATE"
+    exit 1
+fi
 
-$NOTE
-
----
-
-Format:
-1. **Takvim**: Toplantilari saatleriyle listele, prep gereken toplantilari belirt
-2. **Kritik**: P1/P2 veya acil dikkat gereken konular
-3. **Yapilacaklar**: dispatch/prep/yours sayilari, onemlileri vurgula
-4. **Bekleyenler**: Carried-over sayisi, dikkat ceken patern varsa belirt
-
-15 satir max. Laf yok, direkt ozet.
-EOF
+python -c "
+import os, sys
+t = open(os.environ['PROMPT_TEMPLATE']).read()
+n = sys.stdin.read()
+print(t.replace('{{DAILY_NOTE}}', n))
+" <<< "$NOTE" | claude -p -

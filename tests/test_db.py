@@ -193,7 +193,7 @@ class TestClassification:
         classify_item(conn, queue_id, "dispatch", reason="Reclassified")
 
         rows = conn.execute(
-            "SELECT * FROM classifications WHERE queue_id = ? ORDER BY created_at",
+            "SELECT * FROM classifications WHERE queue_id = ? ORDER BY id",
             (queue_id,),
         ).fetchall()
         assert len(rows) == 2

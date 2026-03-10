@@ -64,12 +64,18 @@ def parse_event(event: dict, calendar_id: str) -> dict:
 
 
 def deduplicate_events(all_events: list[dict]) -> list[dict]:
-    """Remove duplicate events across calendars (same summary + same start time)."""
+    """Remove duplicate events across calendars (same summary + same start time).
+
+    Events without a summary are keyed by their unique ID to avoid collisions.
+    """
     seen = {}
     for ev in all_events:
-        key = f"{ev['summary']}_{ev['start_time']}"
-        if key not in seen or not ev["summary"]:
-            seen[ev["id"] if not ev["summary"] else key] = ev
+        if not ev["summary"]:
+            key = ev["id"]
+        else:
+            key = f"{ev['summary']}_{ev['start_time']}"
+        if key not in seen:
+            seen[key] = ev
     return list(seen.values())
 
 

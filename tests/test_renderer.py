@@ -15,6 +15,7 @@ from cos.db import (
     init_db,
     insert_email,
     insert_event,
+    insert_feed,
     insert_health_check,
     insert_task,
     record_action,
@@ -154,6 +155,78 @@ class TestRender:
         content = render(conn, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         assert "Collection Issues" in content
         assert "MCP auth expired" in content
+
+    def test_feed_in_classified(self, conn):
+        """Feed items show real titles in classified section, not 'Untitled'."""
+        q = insert_feed(
+            conn,
+            {
+                "id": "feed_1",
+                "feed_id": 10,
+                "feed_title": "TechCrunch",
+                "title": "AI startup raises $50M",
+                "url": "https://example.com/article",
+                "published_at": f"{TARGET_DATE}T08:00:00Z",
+                "reading_time": 3,
+                "priority": "P3",
+            },
+        )
+        classify_item(conn, q, "skip", reason="Industry news, not actionable")
+        content = render(conn, TARGET_DATE)
+        assert "AI startup raises $50M" in content
+        assert "Untitled" not in content
+
+    def test_feed_in_carried_over(self, db_path):
+        """Feed items carried over show real titles."""
+        from datetime import timedelta
+
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        with connect(db_path) as conn:
+            insert_feed(
+                conn,
+                {
+                    "id": "feed_old",
+                    "feed_id": 10,
+                    "feed_title": "HackerNews",
+                    "title": "Show HN: My side project",
+                    "url": "https://example.com/hn",
+                    "published_at": f"{yesterday}T12:00:00Z",
+                    "reading_time": 2,
+                    "priority": "P3",
+                },
+            )
+            # Backdate the work_queue entry
+            conn.execute(
+                "UPDATE work_queue SET collected_at = ? WHERE domain_type = 'feed' AND domain_id = 'feed_old'",
+                (f"{yesterday}T12:00:00",),
+            )
+
+            content = render(conn, TARGET_DATE)
+            assert "Show HN: My side project" in content
+            assert "#feed" in content
+
+    def test_feed_highlights_section(self, conn):
+        """Feed highlights section shows feed titles and reading time."""
+        insert_feed(
+            conn,
+            {
+                "id": "feed_h1",
+                "feed_id": 10,
+                "feed_title": "Ars Technica",
+                "title": "New chip breakthrough",
+                "url": "https://example.com/chip",
+                "published_at": f"{TARGET_DATE}T09:00:00Z",
+                "reading_time": 5,
+                "priority": "P4",
+            },
+        )
+        content = render(conn, TARGET_DATE)
+        assert "Feed Highlights" in content
+        assert "New chip breakthrough" in content
+        assert "Ars Technica" in content
+        assert "~5min" in content
 
     def test_actions_section(self, populated_db):
         record_action(

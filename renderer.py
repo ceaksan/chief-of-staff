@@ -55,36 +55,12 @@ def fetch_health(conn, target_date: str) -> list[dict]:
 def fetch_classified(conn, target_date: str) -> dict[str, list[dict]]:
     """Fetch classified items grouped by category."""
     rows = conn.execute(
-        """SELECT
-               wq.id AS queue_id,
-               wq.domain_type,
-               wq.domain_id,
-               wq.priority,
-               wq.status AS queue_status,
-               c.category,
-               c.reason,
-               CASE wq.domain_type
-                   WHEN 'email' THEN e.subject
-                   WHEN 'event' THEN ev.summary
-                   WHEN 'task' THEN t.content
-                   WHEN 'health' THEN h.project || ': ' || h.status
-               END AS title,
-               CASE wq.domain_type
-                   WHEN 'email' THEN e.sender
-                   WHEN 'event' THEN ev.calendar_id
-                   WHEN 'task' THEN t.project
-                   WHEN 'health' THEN h.project
-               END AS context
-           FROM work_queue wq
-           JOIN classifications c ON c.id = (
-               SELECT id FROM classifications WHERE queue_id = wq.id ORDER BY created_at DESC LIMIT 1
-           )
-           LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-           LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-           LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-           LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-           WHERE date(wq.collected_at) = ?
-           ORDER BY wq.priority, wq.collected_at""",
+        """SELECT queue_id, domain_type, domain_id, priority,
+               status AS queue_status, category, reason, title, context
+           FROM v_queue_enriched
+           WHERE category IS NOT NULL
+           AND date(collected_at) = ?
+           ORDER BY priority, collected_at""",
         (target_date,),
     ).fetchall()
 
@@ -108,8 +84,8 @@ def fetch_feeds(conn, target_date: str) -> list[dict]:
         """SELECT f.title, f.url, f.feed_title, f.reading_time
            FROM feeds f
            JOIN work_queue wq ON wq.domain_type = 'feed' AND wq.domain_id = f.id
-           WHERE date(f.collected_at) = ?
-           ORDER BY wq.priority, f.collected_at""",
+           WHERE date(wq.collected_at) = ?
+           ORDER BY wq.priority, wq.collected_at""",
         (target_date,),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -118,33 +94,13 @@ def fetch_feeds(conn, target_date: str) -> list[dict]:
 def fetch_carried_over(conn, target_date: str) -> list[dict]:
     """Fetch items pending from previous days (carried over)."""
     rows = conn.execute(
-        """SELECT
-               wq.id AS queue_id,
-               wq.domain_type,
-               wq.priority,
-               wq.collected_at,
-               CASE wq.domain_type
-                   WHEN 'email' THEN e.subject
-                   WHEN 'event' THEN ev.summary
-                   WHEN 'task' THEN t.content
-                   WHEN 'health' THEN h.project || ': ' || h.status
-               END AS title,
-               CASE wq.domain_type
-                   WHEN 'email' THEN e.sender
-                   WHEN 'event' THEN ev.calendar_id
-                   WHEN 'task' THEN t.project
-                   WHEN 'health' THEN h.project
-               END AS context
-           FROM work_queue wq
-           LEFT JOIN emails e ON wq.domain_type = 'email' AND wq.domain_id = e.id
-           LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
-           LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
-           LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-           WHERE wq.status IN ('pending', 'classified')
-           AND wq.domain_type != 'event'
-           AND date(wq.collected_at) < ?
-           AND wq.collected_at >= datetime(?, '-3 days')
-           ORDER BY wq.priority, wq.collected_at""",
+        """SELECT queue_id, domain_type, priority, collected_at, title, context
+           FROM v_queue_enriched
+           WHERE status IN ('pending', 'classified')
+           AND domain_type != 'event'
+           AND date(collected_at) < ?
+           AND collected_at >= datetime(?, '-3 days')
+           ORDER BY priority, collected_at""",
         (target_date, target_date),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -198,7 +154,13 @@ def _priority_tag(priority: str | None) -> str:
 
 
 def _domain_tag(domain_type: str) -> str:
-    tags = {"email": "#email", "task": "#task", "health": "#dev", "event": "#calendar"}
+    tags = {
+        "email": "#email",
+        "task": "#task",
+        "health": "#dev",
+        "event": "#calendar",
+        "feed": "#feed",
+    }
     return tags.get(domain_type, "")
 
 

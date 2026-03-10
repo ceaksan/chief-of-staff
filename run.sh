@@ -21,11 +21,27 @@ trap '/bin/rm -f .lockfile' EXIT
 mkdir -p logs .tmp
 source .venv/bin/activate
 
+# Read a single config value: read_cfg claude.collector_budget 2.00
+read_cfg() {
+    CFG_KEY="$1" CFG_DEFAULT="$2" python -c "
+import os
+from cos.config import load_config
+c = load_config()
+v = c
+for k in os.environ['CFG_KEY'].split('.'):
+    v = v.get(k, {})
+print(v if v != {} else os.environ.get('CFG_DEFAULT', ''))
+"
+}
+
 STEP="${1:-full}"
 
 run_collect() {
+    local budget=$(read_cfg claude.collector_budget 2.00)
+    local model=$(read_cfg claude.collector_model sonnet)
+
     echo "=== Step 1: Collection (Gmail + Calendar via MCP) ==="
-    claude -p prompts/collect.md --budget 2.00 2>> logs/claude-collect.log
+    claude -p prompts/collect.md --budget "$budget" --model "$model" 2>> logs/claude-collect.log
     echo ""
 
     echo "=== Step 2: Feed + Health + Task Collection ==="
@@ -36,14 +52,20 @@ run_collect() {
 }
 
 run_classify() {
+    local budget=$(read_cfg claude.classifier_budget 1.50)
+    local model=$(read_cfg claude.classifier_model sonnet)
+
     echo "=== Step 3: Classification ==="
-    claude -p prompts/classifier.md --budget 1.50 2>> logs/claude-classifier.log
+    claude -p prompts/classifier.md --budget "$budget" --model "$model" 2>> logs/claude-classifier.log
     echo ""
 }
 
 run_sweep() {
+    local budget=$(read_cfg claude.sweep_budget 3.00)
+    local model=$(read_cfg claude.sweep_model opus)
+
     echo "=== Step 4: Morning Sweep ==="
-    claude -p prompts/sweep.md --budget 3.00 2>> logs/claude-sweep.log
+    claude -p prompts/sweep.md --budget "$budget" --model "$model" 2>> logs/claude-sweep.log
     echo ""
 }
 
@@ -103,6 +125,26 @@ conn.close()
 "
 }
 
+run_cleanup() {
+    DAYS="${1:-30}"
+    echo "=== Cleanup (older than $DAYS days) ==="
+    python -c "
+from cos.db import connect, get_db_path, cleanup
+from cos.config import load_config
+config = load_config()
+with connect(get_db_path(config)) as conn:
+    stats = cleanup(conn, days=$DAYS)
+    total = sum(stats.values())
+    if total == 0:
+        print('Nothing to clean up.')
+    else:
+        for k, v in stats.items():
+            if v > 0:
+                print(f'  {k}: {v} deleted')
+        print(f'  Total: {total} records purged')
+"
+}
+
 case "$STEP" in
     full)
         run_collect
@@ -127,9 +169,12 @@ case "$STEP" in
     status)
         run_status
         ;;
+    cleanup)
+        run_cleanup "$2"
+        ;;
     *)
         echo "Unknown step: $STEP"
-        echo "Usage: ./run.sh [full|collect|classify|sweep|render|status]"
+        echo "Usage: ./run.sh [full|collect|classify|sweep|render|status|cleanup [days]]"
         exit 1
         ;;
 esac

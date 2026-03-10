@@ -10,10 +10,16 @@ Working directory: `.`
 
 Collect events for today and tomorrow from all configured calendars.
 
-Use `gcal_list_events` for each calendar:
-- `primary` (user@example.com)
-- `secondary@example.com`
-- `other@example.com`
+Use `gcal_list_events` for each calendar ID listed in `config.toml` under `[calendars] ids`.
+
+Read the config first:
+```bash
+cd .
+source .venv/bin/activate
+python -c "from cos.config import load_config; c = load_config(); print('\n'.join(c['calendars']['ids']))"
+```
+
+Then call `gcal_list_events` for each returned calendar ID.
 
 Parameters:
 - timeMin: today at 00:00:00 (local time)

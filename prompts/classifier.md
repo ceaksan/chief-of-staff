@@ -43,11 +43,11 @@ If `pending_count` is 0, print "No items to classify" and stop.
 ### Step 2: Classify each item
 
 For each item in the output, determine the category based on:
-- `domain_type`: email, event, task, health
-- `title`: subject/summary/content
-- `context`: sender/calendar/project
-- `detail`: snippet/location/file_path
-- `priority`: P1, P2, or null
+- `domain_type`: email, event, task, health, feed
+- `title`: subject/summary/content/feed title
+- `context`: sender/calendar/project/feed source
+- `detail`: snippet/location/file_path/feed excerpt
+- `priority`: P1, P2, P3, P4, or null
 
 Create a JSON array of classifications:
 ```json
@@ -70,6 +70,7 @@ Rules:
 - `reason` should be 1 short sentence explaining why.
 - P1 items should almost never be "skip".
 - Health checks with status "down" or "error" should be "yours" or "prep".
+- Feed items are RSS/Atom entries. Most should be "skip" unless directly relevant to active projects or requiring action. Short reads (P3) related to your industry/stack can be "prep" for summarization.
 - Events with `prep_needed` should be "prep" unless trivially simple.
 
 ### Step 3: Import classifications
