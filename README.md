@@ -91,9 +91,9 @@ All calendars accessible through a single MCP connection via calendar sharing:
 | Calendar | Access | Purpose |
 |----------|--------|---------|
 | `user@example.com` | owner (primary) | Personal |
-| `shared-reader@example.com` | reader | DNOMIA |
-| `other-reader@example.com` | reader | Analyzify |
-| `freebusy-reader@example.com` | freeBusyReader | Rentiva |
+| `shared-reader@example.com` | reader | Project A |
+| `other-reader@example.com` | reader | Project B |
+| `freebusy-reader@example.com` | freeBusyReader | Project C |
 | Luma | reader | Events |
 
 ## Layers
@@ -173,7 +173,7 @@ The overnight process produces a ready-to-review briefing:
 
 ## Project Status
 - OK: project-a, project-b, project-c
-- validough: 3 errors (Neon connection timeout)
+- project-d: 3 errors (connection timeout)
 
 ## Classified Tasks
 
@@ -183,14 +183,14 @@ The overnight process produces a ready-to-review briefing:
 
 ### PREP (80% ready, you finish)
 - [ ] Client Y hosting migration reply - draft ready (#email)
-- [ ] validough Neon timeout - summary + fix direction (#dev)
+- [ ] project-d timeout - summary + fix direction (#dev)
 
 ### YOURS (your brain needed)
 - [ ] Client X meeting prep
-- [ ] leetty checkout flow fix (#dev)
+- [ ] project-e checkout flow fix (#dev)
 
 ### SKIP (not today)
-- [ ] validough onboarding wizard - P3, deadline far
+- [ ] project-d onboarding wizard - P3, deadline far
 
 ## Carried Over
 - [ ] [P2] Blog post publish - pending 2 days
@@ -294,6 +294,31 @@ collector_time = "06:00"
 force_yours = ["pricing", "strategy", "contract"]
 force_dispatch = ["meeting confirmation", "calendar update"]
 ```
+
+### Architecture Documentation (optional)
+
+Generate a structured architecture document for AI tools (Claude, Gemini, Cursor) using the [Living Architecture](https://github.com/ceaksan/living-architecture) template:
+
+```bash
+curl -sL https://raw.githubusercontent.com/ceaksan/living-architecture/main/TEMPLATE.md -o architecture.md
+# Fill sections based on your project. See DEPTH_GUIDE.md for L1/L2/L3 detail levels.
+```
+
+The `architecture.md` file is gitignored. Each user generates their own based on their deployment.
+
+### Code Health Integration (optional)
+
+Chief of Staff can include daily code audit results in the Daily Note. This requires [daily-code-review](https://github.com/ceaksan/daily-code-review) (dnm-audit) to be set up and scheduled separately.
+
+1. Install and configure daily-code-review with its own schedule (cron/launchd)
+2. Add the reports directory to `config.toml`:
+
+```toml
+[code_review]
+reports_dir = "/path/to/code-review-reports"
+```
+
+The renderer reads `{reports_dir}/{YYYY-MM-DD}/DIGEST.md` and adds a **Code Health** section to the Daily Note. If no report exists for the day (weekends, holidays), the section is silently omitted.
 
 ### Manual Usage
 

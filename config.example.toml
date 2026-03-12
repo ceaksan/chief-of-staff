@@ -62,6 +62,12 @@ max_entries = 50
 lookback_hours = 24
 mark_read = false
 
+[code_review]
+# Path to daily-code-review (dnm-audit) report output directory
+# Reports are expected at: {reports_dir}/{YYYY-MM-DD}/DIGEST.md
+# Leave empty to disable code health section in Daily Note
+reports_dir = ""
+
 [agents]
 # Folders the Content Agent can write to (relative to vault root)
 content_write_folders = ["Content/Drafts", "Research"]

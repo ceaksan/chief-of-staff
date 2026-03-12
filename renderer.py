@@ -7,6 +7,7 @@ Usage:
     python renderer.py --stdout  # print to stdout instead of writing file
 """
 
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -164,7 +165,56 @@ def _domain_tag(domain_type: str) -> str:
     return tags.get(domain_type, "")
 
 
-def render(conn, target_date: str) -> str:
+def fetch_code_health(config: dict, target_date: str) -> dict | None:
+    """Read DIGEST.md from daily-code-review output directory.
+
+    Returns parsed dict with lens, repos, files, findings, critical, and
+    per-repo table rows. Returns None if no report exists or code_review
+    is not configured.
+    """
+    reports_dir = config.get("code_review", {}).get("reports_dir", "")
+    if not reports_dir:
+        return None
+
+    digest_path = Path(reports_dir).expanduser() / target_date / "DIGEST.md"
+    if not digest_path.exists():
+        return None
+
+    text = digest_path.read_text(encoding="utf-8")
+
+    result: dict = {"repo_details": []}
+
+    for key in ("Lens", "Repos", "Files", "Findings", "Critical"):
+        match = re.search(rf"\*\*{key}\*\*:\s*(.+)", text)
+        if match:
+            val = match.group(1).strip()
+            result[key.lower()] = int(val) if val.isdigit() else val
+
+    table_started = False
+    for line in text.splitlines():
+        if line.startswith("| Repo"):
+            table_started = True
+            continue
+        if table_started and line.startswith("| ---"):
+            continue
+        if table_started and line.startswith("|"):
+            cols = [c.strip() for c in line.strip("|").split("|")]
+            if len(cols) >= 4:
+                result["repo_details"].append(
+                    {
+                        "name": cols[0],
+                        "findings": cols[1],
+                        "critical": cols[2],
+                        "files": cols[3],
+                    }
+                )
+        elif table_started:
+            break
+
+    return result if "lens" in result else None
+
+
+def render(conn, target_date: str, config: dict | None = None) -> str:
     """Generate Daily Note markdown from cos.db data."""
     lines: list[str] = []
     lines.append(f"# {target_date}")
@@ -224,6 +274,27 @@ def render(conn, target_date: str) -> str:
     else:
         lines.append("- No health data collected")
     lines.append("")
+
+    # Code Health (from daily-code-review / dnm-audit)
+    if config:
+        code_health = fetch_code_health(config, target_date)
+        if code_health:
+            lines.append("## Code Health")
+            lens = code_health.get("lens", "?")
+            findings = code_health.get("findings", 0)
+            critical = code_health.get("critical", 0)
+            files = code_health.get("files", 0)
+            lines.append(
+                f"- **Lens**: {lens} | Files: {files} | Findings: {findings} | Critical: {critical}"
+            )
+            for repo in code_health.get("repo_details", []):
+                crit = (
+                    f" ({repo['critical']} critical)"
+                    if int(repo["critical"]) > 0
+                    else ""
+                )
+                lines.append(f"- {repo['name']}: {repo['findings']} findings{crit}")
+            lines.append("")
 
     # Feed Highlights
     feeds = fetch_feeds(conn, target_date)
@@ -359,7 +430,7 @@ def main():
     target_date = args.date or datetime.now().strftime("%Y-%m-%d")
 
     with connect(db_path) as conn:
-        content = render(conn, target_date)
+        content = render(conn, target_date, config)
 
     if args.stdout:
         print(content)
