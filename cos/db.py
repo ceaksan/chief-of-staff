@@ -173,6 +173,36 @@ def insert_feed(conn: sqlite3.Connection, feed: dict) -> int | None:
     return _enqueue(conn, "feed", feed["id"], feed.get("priority"), feed)
 
 
+def insert_radar_entry(conn: sqlite3.Connection, entry: dict) -> int | None:
+    """Insert radar entry (pre-classified) and create work queue entry.
+
+    Radar entries arrive already classified from Opportunity Radar.
+    The collector handles classification directly after enqueue.
+    """
+    # Map radar categories to CoS priorities
+    priority_map = {"opportunity": "P2", "trend": "P3", "hiring": "P2"}
+    priority = priority_map.get(entry.get("category", ""), "P3")
+
+    try:
+        conn.execute(
+            """INSERT INTO radar_entries (id, source, title, url, radar_category, confidence, reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry["id"],
+                entry["source"],
+                entry["title"],
+                entry.get("url"),
+                entry["category"],
+                entry.get("confidence"),
+                entry.get("reason"),
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return None
+
+    return _enqueue(conn, "radar", entry["id"], priority, entry)
+
+
 def _enqueue(
     conn: sqlite3.Connection,
     domain_type: str,
@@ -348,6 +378,7 @@ def cleanup(conn: sqlite3.Connection, days: int = 30) -> dict:
         "tasks": "task",
         "health_checks": "health",
         "feeds": "feed",
+        "radar_entries": "radar",
     }
     for table, dtype in _DOMAIN_TABLES.items():
         assert table.isidentifier(), f"Invalid table name: {table}"

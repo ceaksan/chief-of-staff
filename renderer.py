@@ -92,6 +92,19 @@ def fetch_feeds(conn, target_date: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def fetch_radar(conn, target_date: str) -> list[dict]:
+    """Fetch radar entries for target date."""
+    rows = conn.execute(
+        """SELECT r.title, r.url, r.source, r.radar_category, r.confidence, r.reason
+           FROM radar_entries r
+           JOIN work_queue wq ON wq.domain_type = 'radar' AND wq.domain_id = r.id
+           WHERE date(wq.collected_at) = ?
+           ORDER BY r.confidence DESC""",
+        (target_date,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def fetch_carried_over(conn, target_date: str) -> list[dict]:
     """Fetch items pending from previous days (carried over)."""
     rows = conn.execute(
@@ -161,6 +174,7 @@ def _domain_tag(domain_type: str) -> str:
         "health": "#dev",
         "event": "#calendar",
         "feed": "#feed",
+        "radar": "#radar",
     }
     return tags.get(domain_type, "")
 
@@ -315,6 +329,23 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
         overflow = len(feeds) - cap
         if overflow > 0:
             lines.append(f"- +{overflow} more")
+        lines.append("")
+
+    # Radar Opportunities
+    radar = fetch_radar(conn, target_date)
+    if radar:
+        lines.append("## Radar Opportunities")
+        for r in radar:
+            title = r.get("title") or "Untitled"
+            url = r.get("url") or ""
+            cat = r.get("radar_category", "")
+            confidence = r.get("confidence")
+            reason = r.get("reason", "")
+            link = f"[{title}]({url})" if url else title
+            conf_str = f" ({confidence:.0%})" if confidence else ""
+            lines.append(f"- {link} [{cat}]{conf_str}")
+            if reason:
+                lines.append(f"  - {reason}")
         lines.append("")
 
     # Classified Tasks

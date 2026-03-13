@@ -87,12 +87,30 @@ CREATE TABLE IF NOT EXISTS feeds (
 CREATE INDEX IF NOT EXISTS idx_feeds_published ON feeds(published_at);
 
 -- ============================================================
+-- Radar Entries (opportunity signals from Opportunity Radar)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS radar_entries (
+    id TEXT PRIMARY KEY,              -- radar entry id (SHA256 hash)
+    source TEXT NOT NULL,             -- reddit, feed, etc.
+    title TEXT NOT NULL,
+    url TEXT,
+    radar_category TEXT NOT NULL,     -- opportunity, trend, hiring
+    confidence REAL,
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_radar_source ON radar_entries(source);
+CREATE INDEX IF NOT EXISTS idx_radar_category ON radar_entries(radar_category);
+
+-- ============================================================
 -- Work Queue (links domain items to pipeline lifecycle)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS work_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    domain_type TEXT NOT NULL CHECK (domain_type IN ('email', 'event', 'task', 'health', 'feed')),
+    domain_type TEXT NOT NULL CHECK (domain_type IN ('email', 'event', 'task', 'health', 'feed', 'radar')),
     domain_id TEXT NOT NULL,          -- FK to domain table (emails.id, events.id, etc.)
     priority TEXT CHECK (priority IN ('P1', 'P2', 'P3', 'P4')),
     status TEXT NOT NULL DEFAULT 'pending'
@@ -193,6 +211,7 @@ CREATE VIEW IF NOT EXISTS v_queue_enriched AS
             WHEN 'task' THEN t.content
             WHEN 'health' THEN h.project || ': ' || h.status
             WHEN 'feed' THEN f.title
+            WHEN 'radar' THEN r.title
         END AS title,
         CASE wq.domain_type
             WHEN 'email' THEN e.sender
@@ -200,6 +219,7 @@ CREATE VIEW IF NOT EXISTS v_queue_enriched AS
             WHEN 'task' THEN t.project
             WHEN 'health' THEN h.project
             WHEN 'feed' THEN f.feed_title
+            WHEN 'radar' THEN r.source
         END AS context,
         CASE wq.domain_type
             WHEN 'email' THEN e.snippet
@@ -207,6 +227,7 @@ CREATE VIEW IF NOT EXISTS v_queue_enriched AS
             WHEN 'task' THEN t.file_path
             WHEN 'health' THEN h.last_error
             WHEN 'feed' THEN substr(f.content, 1, 200)
+            WHEN 'radar' THEN r.reason
         END AS detail,
         CASE wq.domain_type
             WHEN 'email' THEN e.thread_id
@@ -214,6 +235,7 @@ CREATE VIEW IF NOT EXISTS v_queue_enriched AS
             WHEN 'task' THEN t.due_date
             WHEN 'health' THEN h.checked_at
             WHEN 'feed' THEN f.url
+            WHEN 'radar' THEN r.url
         END AS extra
     FROM work_queue wq
     LEFT JOIN classifications c ON c.id = (
@@ -223,7 +245,8 @@ CREATE VIEW IF NOT EXISTS v_queue_enriched AS
     LEFT JOIN events ev ON wq.domain_type = 'event' AND wq.domain_id = ev.id
     LEFT JOIN tasks t ON wq.domain_type = 'task' AND wq.domain_id = t.id
     LEFT JOIN health_checks h ON wq.domain_type = 'health' AND wq.domain_id = h.id
-    LEFT JOIN feeds f ON wq.domain_type = 'feed' AND wq.domain_id = f.id;
+    LEFT JOIN feeds f ON wq.domain_type = 'feed' AND wq.domain_id = f.id
+    LEFT JOIN radar_entries r ON wq.domain_type = 'radar' AND wq.domain_id = r.id;
 
 -- Active items: pending or in-progress, last 3 days
 CREATE VIEW IF NOT EXISTS v_active_queue AS
