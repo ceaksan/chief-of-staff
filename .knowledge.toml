@@ -1,0 +1,18 @@
+[project]
+name = "chief-of-staff"
+type = "saas"
+
+[content]
+paths = ["docs", "prompts"]
+extensions = [".md"]
+
+[code]
+preset = "python"
+paths = ["collectors", "agents"]
+
+[graph]
+enabled = true
+edge_types = ["link", "semantic", "import"]
+
+[indexing]
+ignore_patterns = ["__pycache__", ".venv", "*.egg-info", ".git", ".mypy_cache", "migrations"]
