@@ -75,11 +75,14 @@ run_classify() {
 }
 
 run_sweep() {
-    local budget=$(read_cfg claude.sweep_budget 3.00)
-    local model=$(read_cfg claude.sweep_model opus)
+    echo "=== Step 4: Morning Sweep (Orchestrator) ==="
+    python collectors/orchestrator.py 2>> logs/claude-sweep.log
+    echo ""
+}
 
-    echo "=== Step 4: Morning Sweep ==="
-    claude -p prompts/sweep.md --budget "$budget" --model "$model" 2>> logs/claude-sweep.log
+run_sweep_seq() {
+    echo "=== Step 4: Morning Sweep (Sequential) ==="
+    python collectors/orchestrator.py --sequential 2>> logs/claude-sweep.log
     echo ""
 }
 
@@ -332,6 +335,9 @@ case "$STEP" in
     sweep)
         run_sweep
         ;;
+    sweep-seq)
+        run_sweep_seq
+        ;;
     render)
         run_render
         ;;
@@ -349,7 +355,7 @@ case "$STEP" in
         ;;
     *)
         echo "Unknown step: $STEP"
-        echo "Usage: ./run.sh [full|collect|classify|sweep|render|status|weekly|insights|cleanup [days]]"
+        echo "Usage: ./run.sh [full|collect|classify|sweep|sweep-seq|render|status|weekly|insights|cleanup [days]]"
         exit 1
         ;;
 esac

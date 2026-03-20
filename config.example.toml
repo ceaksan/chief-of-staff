@@ -90,3 +90,30 @@ weekly_url = ""      # weekly stats digest
 content_write_folders = ["Content/Drafts", "Research"]
 # Folders the Calendar Agent can write to
 calendar_write_folders = ["Daily"]
+# Maximum concurrent agent processes (start with 2, increase after testing)
+max_workers = 2
+
+[agents.email]
+budget = 1.00
+model = "opus"
+timeout = 300
+
+[agents.calendar]
+budget = 0.50
+model = "sonnet"
+timeout = 180
+
+[agents.health]
+budget = 0.50
+model = "sonnet"
+timeout = 120
+
+[agents.task]
+budget = 0.50
+model = "sonnet"
+timeout = 180
+
+[agents.feed]
+budget = 0.50
+model = "sonnet"
+timeout = 180
