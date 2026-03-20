@@ -130,18 +130,19 @@ Classification is written back to `cos.db` and rendered into the Daily Note. Whe
 
 ### Layer 2: Morning Sweep
 
-On-demand. You trigger it when ready. Uses Claude Opus with a $3.00 budget cap.
+On-demand. You trigger it when ready. `collectors/orchestrator.py` dispatches domain agents in parallel using asyncio, with semaphore-based concurrency control (`max_workers` in config). Each agent has its own budget cap. Use `--sequential` flag for debugging.
 
 1. Reads the classified Daily Note
 2. Shows the plan, you approve or adjust
 3. Fires subagents in parallel for approved DISPATCH + PREP tasks
 
-| Agent | Scope | Safety |
-|-------|-------|--------|
-| **Email Agent** | Creates Gmail drafts via MCP | Never sends |
-| **Dev Prep Agent** | Error log summary + fix direction (no code) | Read-only |
-| **Content Agent** | Blog post drafts, research notes | Writes to specific Obsidian folders only |
-| **Calendar Agent** | Meeting prep notes (client context, agenda) | Read-only |
+| Agent | Scope | Model | Budget | Safety |
+|-------|-------|-------|--------|--------|
+| **Email Agent** | Gmail draft creation | Opus | $1.00 | Never sends |
+| **Calendar Agent** | Meeting prep notes | Sonnet | $0.50 | Read-only |
+| **Health Agent** | Error analysis + fix direction | Sonnet | $0.50 | No code patches |
+| **Task Agent** | Task completion notes, research | Sonnet | $0.50 | Scoped vault folders |
+| **Feed Agent** | Actionable feed summaries | Sonnet | $0.50 | Scoped vault folders |
 
 Completion report appends to the Daily Note. Task statuses update in `cos.db`.
 
@@ -199,26 +200,38 @@ The overnight process produces a ready-to-review briefing:
 ## Project Structure
 
 ```
-~/.chief-of-staff/
-├── cos.db                      # SQLite database
-├── config.toml                 # Paths, rules, schedule
-├── lockfile                    # Mutex for collectors
-├── logs/                       # Structured JSON logs
-│   └── YYYY-MM-DD.json
-├── collectors/
-│   ├── health_collector.py     # Calls existing monitoring scripts
-│   └── task_collector.py       # Greps Obsidian vault for open tasks
-├── renderer.py                 # SQLite → Obsidian Daily Note
-├── prompts/
-│   ├── collect.md              # MCP collection prompt (Gmail + Calendar)
-│   ├── classifier.md           # Sonnet classification prompt
-│   ├── sweep.md                # Opus sweep prompt
-│   └── dayblock.md             # Sonnet day block prompt
-└── agents/
-    ├── email_agent.md          # Subagent instructions
-    ├── dev_agent.md
-    ├── content_agent.md
-    └── calendar_agent.md
+chief-of-staff/
+├── cos/                        # Core library
+│   ├── config.py               # TOML config loader
+│   ├── db.py                   # SQLite access layer (inserts, queries, cleanup)
+│   └── log.py                  # Structured JSON logging
+├── collectors/                 # Data collection + pipeline stages
+│   ├── calendar_collector.py   # Google Calendar MCP response parser
+│   ├── gmail_collector.py      # Gmail MCP response parser
+│   ├── feed_collector.py       # Miniflux REST API collector
+│   ├── task_collector.py       # Obsidian vault task scanner
+│   ├── health_collector.py     # Project health script runner
+│   ├── radar_collector.py      # Opportunity Radar signal importer
+│   ├── classifier.py           # Classification export/import CLI
+│   ├── sweep.py                # Sweep export/record/complete CLI
+│   └── orchestrator.py         # Parallel sweep orchestrator (asyncio)
+├── prompts/                    # Claude system prompts
+│   ├── collect.md              # MCP collection instructions
+│   ├── classifier.md           # Classification rules + decision framework
+│   ├── sweep.md                # Monolithic sweep prompt (fallback)
+│   ├── brief.md                # Turkish daily brief template
+│   └── agents/                 # Domain-specific subagent prompts
+│       ├── email-agent.md      # Email draft creation
+│       ├── calendar-agent.md   # Meeting prep notes
+│       ├── health-agent.md     # Error analysis + fix direction
+│       ├── task-agent.md       # Task completion notes
+│       └── feed-agent.md       # Feed summary + action items
+├── tests/                      # pytest unit tests (7 modules)
+├── schema.sql                  # SQLite schema (9 tables, 5 views)
+├── renderer.py                 # SQLite -> Obsidian Daily Note
+├── run.sh                      # Pipeline orchestrator (mutex, step routing)
+├── config.toml                 # User config (gitignored)
+└── config.example.toml         # Config template
 ```
 
 ## Setup
@@ -328,9 +341,13 @@ cd /path/to/chief-of-staff
 ./run.sh              # full pipeline (collect + classify + sweep + render)
 ./run.sh collect      # collection only (Gmail, Calendar, Feeds, Tasks, Health)
 ./run.sh classify     # classification only
-./run.sh sweep        # morning sweep only
+./run.sh sweep        # morning sweep only (parallel agents)
+./run.sh sweep-seq    # morning sweep (sequential, for debugging)
 ./run.sh render       # re-render daily note only
 ./run.sh status       # show pipeline status
+./run.sh weekly       # weekly stats digest
+./run.sh insights     # scheduling insights
+./run.sh cleanup 30   # purge records older than 30 days
 ```
 
 ### Schedule Setup (optional)
@@ -352,7 +369,7 @@ alias cos-health="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief
 alias cos-tasks="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief-of-staff/collectors/task_collector.py"
 alias cos-render="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief-of-staff/renderer.py"
 alias cos-classify="claude -p ~/.chief-of-staff/prompts/classifier.md --budget 1.50"
-alias cos-sweep="claude -p ~/.chief-of-staff/prompts/sweep.md --budget 3.00"
+alias cos-sweep="cd ~/.chief-of-staff && ./run.sh sweep"
 alias cos-dayblock="claude -p ~/.chief-of-staff/prompts/dayblock.md --budget 1.00"
 ```
 
@@ -367,39 +384,20 @@ Build incrementally. Each phase adds standalone value.
 | 3 | Gmail collection (MCP) | Claude (Sonnet) |
 | 4 | Health Collector (integrate existing scripts) | Python only |
 | 5 | Overnight Classifier | Claude (Sonnet) |
-| 6 | Morning Sweep + subagents | Claude (Opus) |
+| 6 | Morning Sweep + parallel orchestrator + subagents | Claude (Opus) |
 | 7 | Day Block + AI Plan calendar | Claude (Sonnet) |
 
 ## SQLite Schema
 
-```sql
-CREATE TABLE items (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,          -- gmail, health, calendar, task
-    type TEXT,                     -- email, ticket, error, event, slot, task
-    payload JSON NOT NULL,
-    priority TEXT,                 -- P1, P2, P3, P4
-    classification TEXT,           -- dispatch, prep, yours, skip
-    status TEXT DEFAULT 'pending', -- pending, processed, done, skipped
-    collected_at TEXT NOT NULL,
-    processed_at TEXT
-);
-
-CREATE UNIQUE INDEX idx_source_id ON items(source, id);
-
-CREATE VIEW rolling_tasks AS
-    SELECT * FROM items
-    WHERE status IN ('pending', 'processed')
-    AND collected_at >= date('now', '-3 days');
-```
+See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md` (generated from Living Architecture template) contains detailed schema documentation.
 
 ## Safety Model
 
 | Rule | Implementation |
 |------|---------------|
 | Never send emails | Email Agent creates drafts only via MCP `gmail_create_draft`. |
-| Budget caps | Each Claude invocation has a `--budget` flag. |
-| Mutex | `flock` lockfile prevents parallel runs. |
+| Budget caps | Each Claude invocation has a `--budget` flag. Per-agent caps prevent runaway spend. |
+| Mutex | `shlock` lockfile prevents parallel runs. |
 | Idempotency | `INSERT OR IGNORE` on unique source+id index. |
 | Dry run | `--dry-run` flag on Day Block previews without writing. |
 | Failure isolation | Source failure doesn't block others. Warning in Daily Note. |
@@ -412,14 +410,14 @@ CREATE VIEW rolling_tasks AS
 |-----------|------|
 | Claude Max subscription | $100/month (required) |
 | Overnight Collection + Classifier (Sonnet) | ~$1.00-3.00/day |
-| Morning Sweep (Opus) | ~$1.00-3.00/day |
+| Morning Sweep: Email Agent (Opus, $1.00) + 4x domain agents (Sonnet, $0.50 each) | ~$1.00-3.00/day |
 | Day Block (Sonnet) | ~$0.25-1.00/day |
 | Google APIs | Free (MCP handles auth) |
 | **Total beyond subscription** | **~$5-15/month** |
 
 ## Inspiration
 
-This project was inspired by [Jim Prosser's Claude Code Chief of Staff](https://github.com/jimprosser/claude-code-cos) system. Key differences:
+This project was inspired by [Mimi Urchison's Claude Chief of Staff](https://github.com/mimurchison/claude-chief-of-staff) system. Key differences:
 
 - **MCP-first**: Gmail and Calendar via Claude's built-in MCP connectors, no custom OAuth
 - **SQLite intermediate layer** instead of direct file manipulation (addresses parsing fragility)
@@ -431,14 +429,14 @@ This project was inspired by [Jim Prosser's Claude Code Chief of Staff](https://
 
 ## Roadmap
 
-- [ ] Phase 1-4: Core collectors and renderer
-- [ ] Phase 5: Overnight classifier
-- [ ] Phase 6: Morning Sweep with subagents
+- [x] Phase 1-4: Core collectors and renderer
+- [x] Phase 5: Overnight classifier
+- [x] Phase 6: Morning Sweep with parallel subagents
 - [ ] Phase 7: Day Block with AI Plan calendar
+- [ ] Retry logic for failed Claude CLI calls
+- [ ] Interactive approval UI (classification review before sweep)
+- [ ] Trend tracking (classification time series)
 - [ ] Hetzner migration option (Docker + sync)
-- [ ] Rolling context (multi-day task tracking)
-- [ ] Feedback loop (learn from email draft rewrites)
-- [ ] Weekly review summary
 
 ## License
 
