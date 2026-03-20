@@ -104,7 +104,7 @@ Runs at 06:00 via launchd. A single `claude -p` session with MCP access collects
 
 ```bash
 # Overnight pipeline (or manual: ./run.sh)
-claude -p prompts/collect.md --budget 2.00    # Gmail + Calendar via MCP → cos.db
+claude -p prompts/collect.md --max-budget-usd 2.00    # Gmail + Calendar via MCP → cos.db
 python collectors/feed_collector.py            # Miniflux feeds → cos.db
 python collectors/health_collector.py          # Health scripts → cos.db
 python collectors/task_collector.py            # Obsidian tasks → cos.db
@@ -364,13 +364,13 @@ launchctl load ~/Library/LaunchAgents/com.chief-of-staff.overnight.plist
 Add to your `.zshrc`:
 
 ```bash
-alias cos-collect="claude -p ~/.chief-of-staff/prompts/collect.md --budget 2.00"
+alias cos-collect="claude -p ~/.chief-of-staff/prompts/collect.md --max-budget-usd 2.00"
 alias cos-health="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief-of-staff/collectors/health_collector.py"
 alias cos-tasks="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief-of-staff/collectors/task_collector.py"
 alias cos-render="source ~/.chief-of-staff/.venv/bin/activate && python ~/.chief-of-staff/renderer.py"
-alias cos-classify="claude -p ~/.chief-of-staff/prompts/classifier.md --budget 1.50"
+alias cos-classify="claude -p ~/.chief-of-staff/prompts/classifier.md --max-budget-usd 1.50"
 alias cos-sweep="cd ~/.chief-of-staff && ./run.sh sweep"
-alias cos-dayblock="claude -p ~/.chief-of-staff/prompts/dayblock.md --budget 1.00"
+alias cos-dayblock="claude -p ~/.chief-of-staff/prompts/dayblock.md --max-budget-usd 1.00"
 ```
 
 ## Build Order
@@ -396,7 +396,7 @@ See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md`
 | Rule | Implementation |
 |------|---------------|
 | Never send emails | Email Agent creates drafts only via MCP `gmail_create_draft`. |
-| Budget caps | Each Claude invocation has a `--budget` flag. Per-agent caps prevent runaway spend. |
+| Budget caps | Each Claude invocation has a `--max-budget-usd` flag. Per-agent caps prevent runaway spend. |
 | Mutex | `shlock` lockfile prevents parallel runs. |
 | Idempotency | `INSERT OR IGNORE` on unique source+id index. |
 | Dry run | `--dry-run` flag on Day Block previews without writing. |

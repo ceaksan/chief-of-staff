@@ -38,6 +38,15 @@ DEFAULT_AGENT_CONFIG = {
     "budget": 0.50,
     "model": "sonnet",
     "timeout": 180,
+    "allowed_tools": "Read,Write,Edit,Bash,Glob,Grep",
+}
+
+AGENT_ALLOWED_TOOLS = {
+    "email": "Read,Bash,mcp__claude_ai_Gmail__gmail_read_thread,mcp__claude_ai_Gmail__gmail_read_message,mcp__claude_ai_Gmail__gmail_create_draft,mcp__claude_ai_Gmail__gmail_search_messages",
+    "calendar": "Read,Write,Bash,mcp__claude_ai_Google_Calendar__gcal_list_events,mcp__claude_ai_Google_Calendar__gcal_get_event",
+    "health": "Read,Write,Bash",
+    "task": "Read,Write,Bash",
+    "feed": "Read,Write,Bash",
 }
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -135,14 +144,22 @@ async def run_agent(
 
     start_time = time.monotonic()
 
+    allowed_tools = AGENT_ALLOWED_TOOLS.get(
+        agent_name, DEFAULT_AGENT_CONFIG["allowed_tools"]
+    )
+
     cmd = [
         "claude",
         "-p",
         str(prompt_path),
-        "--budget",
+        "--max-budget-usd",
         str(budget),
         "--model",
         model,
+        "--allowedTools",
+        allowed_tools,
+        "--permission-mode",
+        "bypassPermissions",
     ]
 
     log_with_data(

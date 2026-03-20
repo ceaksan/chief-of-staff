@@ -70,7 +70,7 @@ run_classify() {
     local model=$(read_cfg claude.classifier_model sonnet)
 
     echo "=== Step 3: Classification ==="
-    claude -p prompts/classifier.md --budget "$budget" --model "$model" 2>> logs/claude-classifier.log
+    claude -p prompts/classifier.md --max-budget-usd "$budget" --model "$model" 2>> logs/claude-classifier.log
     echo ""
 }
 
