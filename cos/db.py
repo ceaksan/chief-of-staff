@@ -245,9 +245,10 @@ def classify_item(
            VALUES (?, ?, ?, ?, ?)""",
         (queue_id, category, reason, model, prompt_version),
     )
+    new_status = "skipped" if category == "skip" else "classified"
     conn.execute(
-        "UPDATE work_queue SET status = 'classified' WHERE id = ?",
-        (queue_id,),
+        "UPDATE work_queue SET status = ? WHERE id = ?",
+        (new_status, queue_id),
     )
 
 

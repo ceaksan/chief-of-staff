@@ -7,6 +7,8 @@
 #   ./run.sh sweep    - morning sweep only
 #   ./run.sh render   - re-render daily note only
 #   ./run.sh status   - show pipeline status
+#   ./run.sh weekly   - weekly stats digest
+#   ./run.sh insights - scheduling insights (manual adaptive)
 
 set -e
 cd "$(dirname "$0")"
@@ -34,18 +36,30 @@ print(v if v != {} else os.environ.get('CFG_DEFAULT', ''))
 "
 }
 
+# Healthchecks.io ping helper
+hc_ping() {
+    local url
+    url=$(read_cfg "healthchecks.${1}_url" "")
+    [ -z "$url" ] && return 0
+    local suffix="${2:-}"
+    curl -fsS -m 10 --retry 3 "${url}${suffix}" >/dev/null 2>&1 || true
+}
+
+# macOS notification on failure
+notify_failure() {
+    local msg="$1"
+    osascript -e "display notification \"$msg\" with title \"Chief of Staff\" sound name \"Basso\"" 2>/dev/null || true
+}
+
 STEP="${1:-full}"
 
 run_collect() {
-    local budget=$(read_cfg claude.collector_budget 2.00)
-    local model=$(read_cfg claude.collector_model sonnet)
-
-    echo "=== Step 1: Collection (Gmail + Calendar via MCP) ==="
-    claude -p prompts/collect.md --budget "$budget" --model "$model" 2>> logs/claude-collect.log
-    echo ""
-
-    echo "=== Step 2: Feed + Health + Task Collection ==="
-    python collectors/feed_collector.py
+    echo "=== Step 1: Feed + Health + Task Collection ==="
+    if python collectors/feed_collector.py; then
+        hc_ping feed
+    else
+        hc_ping feed /fail
+    fi
     python collectors/health_collector.py 2>/dev/null || echo "  (health collector skipped - no scripts configured)"
     python collectors/task_collector.py
     echo ""
@@ -125,6 +139,157 @@ conn.close()
 "
 }
 
+run_weekly() {
+    echo "=== Weekly Stats Digest ==="
+    python -c "
+from cos.db import connect, get_db_path, init_db
+from cos.config import load_config
+
+config = load_config()
+db_path = get_db_path(config)
+init_db(db_path)
+
+with connect(db_path) as conn:
+    # Items collected by source
+    rows = conn.execute('''
+        SELECT domain_type, COUNT(*) as cnt
+        FROM work_queue
+        WHERE collected_at >= datetime('now', '-7 days')
+        GROUP BY domain_type ORDER BY cnt DESC
+    ''').fetchall()
+    total = sum(r['cnt'] for r in rows)
+    print(f'Items collected (7d): {total}')
+    for r in rows:
+        print(f'  {r[\"domain_type\"]}: {r[\"cnt\"]}')
+
+    # Classification breakdown
+    rows = conn.execute('''
+        SELECT c.category, COUNT(*) as cnt
+        FROM classifications c
+        JOIN work_queue wq ON wq.id = c.queue_id
+        WHERE wq.collected_at >= datetime('now', '-7 days')
+        GROUP BY c.category ORDER BY cnt DESC
+    ''').fetchall()
+    if rows:
+        print('Classifications (7d):')
+        for r in rows:
+            print(f'  {r[\"category\"]}: {r[\"cnt\"]}')
+
+    # Run stats
+    rows = conn.execute('''
+        SELECT layer, COUNT(*) as runs,
+               SUM(items_processed) as processed,
+               SUM(items_failed) as failed,
+               ROUND(SUM(budget_used), 2) as budget
+        FROM runs
+        WHERE started_at >= datetime('now', '-7 days')
+        GROUP BY layer
+    ''').fetchall()
+    if rows:
+        print('Pipeline runs (7d):')
+        total_budget = 0
+        for r in rows:
+            failed = f', {r[\"failed\"]} failed' if r['failed'] else ''
+            budget = r['budget'] or 0
+            total_budget += budget
+            print(f'  {r[\"layer\"]}: {r[\"runs\"]} runs, {r[\"processed\"]} items{failed} (\${budget})')
+        print(f'  Total budget: \${total_budget:.2f}')
+
+    # Failure rate
+    total_runs = conn.execute('''
+        SELECT COUNT(*) FROM runs WHERE started_at >= datetime('now', '-7 days')
+    ''').fetchone()[0]
+    failed_runs = conn.execute('''
+        SELECT COUNT(*) FROM runs
+        WHERE started_at >= datetime('now', '-7 days') AND status IN ('failed', 'partial')
+    ''').fetchone()[0]
+    if total_runs > 0:
+        rate = (failed_runs / total_runs) * 100
+        print(f'Failure rate: {failed_runs}/{total_runs} ({rate:.0f}%)')
+"
+    hc_ping weekly
+}
+
+run_insights() {
+    echo "=== Scheduling Insights ==="
+    python -c "
+from cos.db import connect, get_db_path, init_db
+from cos.config import load_config
+
+config = load_config()
+db_path = get_db_path(config)
+init_db(db_path)
+
+with connect(db_path) as conn:
+    # Volume by day of week
+    rows = conn.execute('''
+        SELECT
+            CASE CAST(strftime('%w', collected_at) AS INTEGER)
+                WHEN 0 THEN 'Sun' WHEN 1 THEN 'Mon' WHEN 2 THEN 'Tue'
+                WHEN 3 THEN 'Wed' WHEN 4 THEN 'Thu' WHEN 5 THEN 'Fri'
+                WHEN 6 THEN 'Sat'
+            END as day,
+            COUNT(*) as cnt
+        FROM work_queue
+        WHERE collected_at >= datetime('now', '-30 days')
+        GROUP BY strftime('%w', collected_at)
+        ORDER BY strftime('%w', collected_at)
+    ''').fetchall()
+    if rows:
+        max_cnt = max(r['cnt'] for r in rows)
+        print('Volume by day of week (30d):')
+        for r in rows:
+            bar = '#' * int((r['cnt'] / max_cnt) * 20)
+            print(f'  {r[\"day\"]}: {r[\"cnt\"]:>4} {bar}')
+
+    # Volume by source per day of week
+    rows = conn.execute('''
+        SELECT domain_type,
+            CASE CAST(strftime('%w', collected_at) AS INTEGER)
+                WHEN 0 THEN 'Sun' WHEN 1 THEN 'Mon' WHEN 2 THEN 'Tue'
+                WHEN 3 THEN 'Wed' WHEN 4 THEN 'Thu' WHEN 5 THEN 'Fri'
+                WHEN 6 THEN 'Sat'
+            END as day,
+            COUNT(*) as cnt
+        FROM work_queue
+        WHERE collected_at >= datetime('now', '-30 days')
+        GROUP BY domain_type, strftime('%w', collected_at)
+        ORDER BY domain_type, strftime('%w', collected_at)
+    ''').fetchall()
+    if rows:
+        print('Source breakdown by day:')
+        current_source = None
+        for r in rows:
+            if r['domain_type'] != current_source:
+                current_source = r['domain_type']
+                print(f'  {current_source}:')
+            print(f'    {r[\"day\"]}: {r[\"cnt\"]}')
+
+    # Average run duration by layer
+    rows = conn.execute('''
+        SELECT layer,
+            ROUND(AVG(
+                (julianday(finished_at) - julianday(started_at)) * 86400
+            ), 1) as avg_sec
+        FROM runs
+        WHERE finished_at IS NOT NULL
+            AND started_at >= datetime('now', '-30 days')
+        GROUP BY layer
+    ''').fetchall()
+    if rows:
+        print('Avg run duration (30d):')
+        for r in rows:
+            print(f'  {r[\"layer\"]}: {r[\"avg_sec\"]}s')
+
+    # Suggestion
+    print()
+    print('Recommendation:')
+    print('  Review the day-of-week pattern above.')
+    print('  If weekends are near-zero, consider skipping Sat/Sun in launchd.')
+    print('  Adjust com.ceaksan.chief-of-staff.plist StartCalendarInterval accordingly.')
+"
+}
+
 run_cleanup() {
     DAYS="${1:-30}"
     echo "=== Cleanup (older than $DAYS days) ==="
@@ -147,12 +312,16 @@ with connect(get_db_path(config)) as conn:
 
 case "$STEP" in
     full)
-        run_collect
-        run_classify
-        run_sweep
-        run_render
-        echo "=== Full pipeline complete ==="
-        run_status
+        hc_ping pipeline /start
+        if run_collect && run_classify && run_sweep && run_render; then
+            echo "=== Full pipeline complete ==="
+            run_status
+            hc_ping pipeline
+        else
+            notify_failure "Pipeline failed. Check logs."
+            hc_ping pipeline /fail
+            exit 1
+        fi
         ;;
     collect)
         run_collect
@@ -172,9 +341,15 @@ case "$STEP" in
     cleanup)
         run_cleanup "$2"
         ;;
+    weekly)
+        run_weekly
+        ;;
+    insights)
+        run_insights
+        ;;
     *)
         echo "Unknown step: $STEP"
-        echo "Usage: ./run.sh [full|collect|classify|sweep|render|status|cleanup [days]]"
+        echo "Usage: ./run.sh [full|collect|classify|sweep|render|status|weekly|insights|cleanup [days]]"
         exit 1
         ;;
 esac

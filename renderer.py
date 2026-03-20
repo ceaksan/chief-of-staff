@@ -53,16 +53,29 @@ def fetch_health(conn, target_date: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def fetch_classified(conn, target_date: str) -> dict[str, list[dict]]:
-    """Fetch classified items grouped by category."""
+def fetch_classified(
+    conn, target_date: str, utc_range: tuple[str, str] | None = None
+) -> dict[str, list[dict]]:
+    """Fetch classified items grouped by category.
+
+    Excludes feed items (they have their own Feed Highlights section).
+    """
+    if utc_range:
+        where = "collected_at >= ? AND collected_at < ?"
+        params = utc_range
+    else:
+        where = "date(collected_at) = ?"
+        params = (target_date,)
     rows = conn.execute(
-        """SELECT queue_id, domain_type, domain_id, priority,
-               status AS queue_status, category, reason, title, context
+        f"""SELECT queue_id, domain_type, domain_id, priority,
+               status AS queue_status, category, reason, title, context, detail
            FROM v_queue_enriched
            WHERE category IS NOT NULL
-           AND date(collected_at) = ?
+           AND domain_type != 'feed'
+           AND status IN ('pending', 'classified', 'approved')
+           AND {where}
            ORDER BY priority, collected_at""",
-        (target_date,),
+        params,
     ).fetchall()
 
     grouped: dict[str, list[dict]] = {
@@ -79,15 +92,27 @@ def fetch_classified(conn, target_date: str) -> dict[str, list[dict]]:
     return grouped
 
 
-def fetch_feeds(conn, target_date: str) -> list[dict]:
-    """Fetch feed entries for target date, ordered by priority."""
+def fetch_feeds(
+    conn, target_date: str, utc_range: tuple[str, str] | None = None
+) -> list[dict]:
+    """Fetch classified feed entries (non-skip) for target date."""
+    if utc_range:
+        where = "wq.collected_at >= ? AND wq.collected_at < ?"
+        params = utc_range
+    else:
+        where = "date(wq.collected_at) = ?"
+        params = (target_date,)
     rows = conn.execute(
-        """SELECT f.title, f.url, f.feed_title, f.reading_time
+        f"""SELECT f.title, f.url, f.feed_title, f.reading_time, c.reason, c.category
            FROM feeds f
            JOIN work_queue wq ON wq.domain_type = 'feed' AND wq.domain_id = f.id
-           WHERE date(wq.collected_at) = ?
-           ORDER BY wq.priority, wq.collected_at""",
-        (target_date,),
+           LEFT JOIN classifications c ON c.queue_id = wq.id
+           WHERE {where}
+           AND (c.category IS NULL OR c.category != 'skip')
+           ORDER BY
+               CASE c.category WHEN 'yours' THEN 0 WHEN 'prep' THEN 1 ELSE 2 END,
+               wq.priority, wq.collected_at""",
+        params,
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -105,13 +130,54 @@ def fetch_radar(conn, target_date: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def fetch_scheduled_content(config: dict | None, target_date: str) -> list[dict]:
+    """Read scheduled posts from vault for target date.
+
+    Scans the configured scheduled directory for files starting with the
+    target date prefix (YYYY-MM-DD). Extracts title from frontmatter or
+    filename.
+    """
+    if not config:
+        return []
+    content_cfg = config.get("content", {})
+    vault_path = content_cfg.get("vault_path", "")
+    scheduled_dir = content_cfg.get("scheduled_dir", "post-scheduler/scheduled")
+    if not vault_path:
+        return []
+
+    sched_path = Path(vault_path).expanduser() / scheduled_dir
+    if not sched_path.exists():
+        return []
+
+    results = []
+    for f in sorted(sched_path.glob(f"{target_date}-*.md")):
+        title = None
+        text = f.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+            if line.startswith("title:"):
+                title = line.split(":", 1)[1].strip().strip('"').strip("'")
+                break
+        if not title:
+            title = f.stem[11:]  # strip date prefix
+            title = title.replace("-", " ").title()
+        results.append({"title": title, "filename": f.name})
+    return results
+
+
 def fetch_carried_over(conn, target_date: str) -> list[dict]:
-    """Fetch items pending from previous days (carried over)."""
+    """Fetch items pending from previous days (carried over).
+
+    Excludes feeds (ephemeral, have their own section) and events (date-bound).
+    """
     rows = conn.execute(
-        """SELECT queue_id, domain_type, priority, collected_at, title, context
+        """SELECT queue_id, domain_type, priority, collected_at, title, context, detail
            FROM v_queue_enriched
            WHERE status IN ('pending', 'classified')
-           AND domain_type != 'event'
+           AND domain_type NOT IN ('event', 'feed')
            AND date(collected_at) < ?
            AND collected_at >= datetime(?, '-3 days')
            ORDER BY priority, collected_at""",
@@ -164,6 +230,44 @@ def _format_time(iso_str: str | None) -> str:
 def _priority_tag(priority: str | None) -> str:
     if priority:
         return f"[{priority}] "
+    return ""
+
+
+def _project_tag(item: dict, project_map: dict[str, str] | None = None) -> str:
+    """Extract project name for task items.
+
+    Uses the explicit project tag (context) first, then falls back to
+    parsing the vault file path (detail) for directory-based project names.
+    Skips generic tags like 'task', 'feed', 'email' that are domain types.
+    """
+    if item.get("domain_type") != "task":
+        return ""
+    domain_tags = {"task", "feed", "email", "calendar", "dev", "radar"}
+    context = item.get("context") or ""
+    if context and context.lower() not in domain_tags:
+        return f"**{context}**: "
+    detail = item.get("detail") or ""
+    project = _project_from_path(detail, project_map or {})
+    if project:
+        return f"**{project}**: "
+    return ""
+
+
+def _project_from_path(file_path: str, project_map: dict[str, str]) -> str:
+    """Extract project name from Obsidian vault file path.
+
+    Uses a pre-built lowercase lookup dict from config [projects] section.
+    """
+    if not file_path:
+        return ""
+    parts = file_path.split("/")
+    lookup = {k.lower(): v for k, v in project_map.items()}
+    for part in parts:
+        name = lookup.get(part.lower())
+        if name:
+            return name
+    if parts[0] == "DNOMIA":
+        return "DNOMIA"
     return ""
 
 
@@ -228,8 +332,26 @@ def fetch_code_health(config: dict, target_date: str) -> dict | None:
     return result if "lens" in result else None
 
 
+def _date_range_utc(target_date: str, utc_offset: int = 3) -> tuple[str, str]:
+    """Convert local date to UTC range for querying.
+
+    Istanbul is UTC+3, so local midnight = 21:00 UTC previous day.
+    Returns (start_utc, end_utc) as ISO strings for WHERE clauses.
+    """
+    from datetime import timedelta
+
+    local_start = datetime.strptime(target_date, "%Y-%m-%d")
+    utc_start = local_start - timedelta(hours=utc_offset)
+    utc_end = utc_start + timedelta(days=1)
+    return utc_start.strftime("%Y-%m-%d %H:%M:%S"), utc_end.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+
 def render(conn, target_date: str, config: dict | None = None) -> str:
     """Generate Daily Note markdown from cos.db data."""
+    utc_range = _date_range_utc(target_date)
+    project_map = config.get("projects", {}) if config else {}
     lines: list[str] = []
     lines.append(f"# {target_date}")
     lines.append("")
@@ -263,6 +385,14 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
     else:
         lines.append("- No events")
     lines.append("")
+
+    # Scheduled Content
+    scheduled = fetch_scheduled_content(config, target_date)
+    if scheduled:
+        lines.append("## Scheduled Content")
+        for s in scheduled:
+            lines.append(f"- {s['title']}")
+        lines.append("")
 
     # Project Status
     health = fetch_health(conn, target_date)
@@ -310,21 +440,18 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
                 lines.append(f"- {repo['name']}: {repo['findings']} findings{crit}")
             lines.append("")
 
-    # Feed Highlights
-    feeds = fetch_feeds(conn, target_date)
+    # Feed Highlights (classified, non-skip only)
+    feeds = fetch_feeds(conn, target_date, utc_range)
     if feeds:
-        cap = 15
+        cap = 10
         lines.append("## Feed Highlights")
         for entry in feeds[:cap]:
             title = entry.get("title") or "Untitled"
             url = entry.get("url") or ""
-            feed_name = entry.get("feed_title") or ""
-            reading_time = entry.get("reading_time")
+            reason = entry.get("reason") or ""
             parts = f"- [{title}]({url})"
-            if feed_name:
-                parts += f" ({feed_name})"
-            if reading_time:
-                parts += f" ~{reading_time}min"
+            if reason:
+                parts += f" - {reason}"
             lines.append(parts)
         overflow = len(feeds) - cap
         if overflow > 0:
@@ -349,7 +476,7 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
         lines.append("")
 
     # Classified Tasks
-    classified = fetch_classified(conn, target_date)
+    classified = fetch_classified(conn, target_date, utc_range)
     has_classified = any(items for items in classified.values())
 
     lines.append("## Classified Tasks")
@@ -368,8 +495,9 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
                     title = item.get("title") or "Untitled"
                     tag = _domain_tag(item["domain_type"])
                     pri = _priority_tag(item.get("priority"))
+                    project = _project_tag(item, project_map)
                     reason = f" - {item['reason']}" if item.get("reason") else ""
-                    lines.append(f"- [ ] {pri}{title}{reason} {tag}")
+                    lines.append(f"- [ ] {pri}{project}{title}{reason} {tag}")
                 lines.append("")
     else:
         lines.append("- Not yet classified")
@@ -382,9 +510,10 @@ def render(conn, target_date: str, config: dict | None = None) -> str:
         for item in carried:
             title = item.get("title") or "Untitled"
             pri = _priority_tag(item.get("priority"))
+            project = _project_tag(item, project_map)
             days = _days_ago(item.get("collected_at"), target_date)
             tag = _domain_tag(item["domain_type"])
-            lines.append(f"- [ ] {pri}{title} - pending {days} {tag}")
+            lines.append(f"- [ ] {pri}{project}{title} - pending {days} {tag}")
         lines.append("")
 
     # Agent Actions

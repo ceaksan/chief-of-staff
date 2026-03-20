@@ -73,6 +73,18 @@ pending_json = "../opportunity-radar/output/pending.json"
 # Leave empty to disable code health section in Daily Note
 reports_dir = ""
 
+[healthchecks]
+# Healthchecks.io ping URLs (free tier: 20 checks, 100 log entries/check)
+# Create checks at https://healthchecks.io and paste ping URLs here
+pipeline_url = ""    # full pipeline run
+feed_url = ""        # standalone feed collector
+weekly_url = ""      # weekly stats digest
+
+[projects]
+# Map vault directory names to human-readable project names
+# Used by the renderer to show project attribution on tasks
+# my-project-dir = "My Project Name"
+
 [agents]
 # Folders the Content Agent can write to (relative to vault root)
 content_write_folders = ["Content/Drafts", "Research"]

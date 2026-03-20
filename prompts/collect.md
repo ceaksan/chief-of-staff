@@ -24,7 +24,7 @@ Then call `gcal_list_events` for each returned calendar ID.
 Parameters:
 - timeMin: today at 00:00:00 (local time)
 - timeMax: tomorrow at 23:59:59 (local time)
-- timeZone: Europe/Istanbul
+- timeZone: Europe/İstanbul
 
 After collecting all events, write the raw MCP response data to a temp JSON file and run the collector:
 
@@ -68,29 +68,7 @@ python collectors/gmail_collector.py --json .tmp/cos_emails.json
 
 If no emails are found, skip this step and note it in the summary.
 
-### Step 3: Task Collection
-
-Run the task collector to scan the Obsidian vault:
-
-```bash
-cd .
-source .venv/bin/activate
-python collectors/task_collector.py
-```
-
-### Step 3b: Feed Collection
-
-Collect unread RSS/Atom feed entries from Miniflux:
-
-```bash
-cd .
-source .venv/bin/activate
-python collectors/feed_collector.py
-```
-
-This fetches unread entries from the last 24 hours via Miniflux REST API and writes them to the `feeds` table + `work_queue`. No MCP needed.
-
-### Step 4: Render Daily Note
+### Step 3: Render Daily Note
 
 Generate the Obsidian Daily Note:
 
@@ -100,7 +78,7 @@ source .venv/bin/activate
 python renderer.py
 ```
 
-### Step 5: Cleanup
+### Step 4: Cleanup
 
 ```bash
 rm -f .tmp/cos_events.json .tmp/cos_emails.json
@@ -121,7 +99,5 @@ After all steps complete, print a summary:
 Collection complete:
 - Calendar: X events collected
 - Gmail: X emails collected, X filtered
-- Tasks: X tasks collected
-- Feeds: X entries collected, X skipped
 - Daily Note: written to <path>
 ```

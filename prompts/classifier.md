@@ -70,7 +70,33 @@ Rules:
 - `reason` should be 1 short sentence explaining why.
 - P1 items should almost never be "skip".
 - Health checks with status "down" or "error" should be "yours" or "prep".
-- Feed items are RSS/Atom entries. Most should be "skip" unless directly relevant to active projects or requiring action. Short reads (P3) related to your industry/stack can be "prep" for summarization.
+- Feed items are RSS/Atom entries. Apply strict relevance filtering based on the owner's profile below. Most feeds should be "skip".
+
+## Owner Profile (for feed relevance)
+
+**Role**: Solo entrepreneur, full-stack developer running multiple SaaS/tool projects.
+
+**Tech stack**: React, Next.js, Tailwind, TypeScript, Django, PostgreSQL, Redis, Cloudflare Workers, Vercel, Hetzner/Coolify.
+
+**Active projects & interests**:
+- **DNOMIA**: Digital analytics consultancy (GA4, GTM, tracking, consent, data layers, e-commerce analytics)
+- **Content Intelligence**: Content analysis and insights platform
+- **Opportunity Radar**: Market opportunity detection system
+- **Product Intelligence**: Product analytics and research
+- **Validough**: Idea validation framework
+- **Prompt Forge**: Prompt optimization toolkit
+- **Chief of Staff**: Personal automation pipeline (this system)
+- **Daily Code Review / dnm-audit**: Automated code review across repos
+- **DNOMIA Knowledge**: Knowledge base indexer and search (MCP server)
+- **Living Architecture**: Self-documenting architecture tools
+- AI/LLM integration (Claude, prompt engineering, agentic workflows, MCP servers)
+- SEO/AEO tooling, conversion optimization
+- Indie hacking, solo SaaS, bootstrapping, developer tooling
+
+**Feed relevance rules**:
+- **yours/prep**: Directly impacts an active project, presents a business opportunity, or covers a breaking change in the tech stack
+- **skip**: Generic tutorials, beginner content, unrelated tech (mobile dev, game dev, data science theory, hardware reviews), listicles, "I built X" posts unless the X is directly relevant
+- Write a 1-sentence `reason` explaining WHY it's relevant or not. This reason appears in the daily brief as a summary.
 - Events with `prep_needed` should be "prep" unless trivially simple.
 
 ### Step 3: Import classifications

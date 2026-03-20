@@ -79,13 +79,23 @@ def parse_task_line(line: str, file_path: str, line_number: int) -> dict | None:
     }
 
 
-def scan_vault(vault_path: Path) -> list[dict]:
-    """Scan Obsidian vault for open tasks."""
+def scan_vault(vault_path: Path, config: dict | None = None) -> list[dict]:
+    """Scan Obsidian vault for open tasks.
+
+    Skips the daily notes directory to avoid circular collection
+    (cos writes tasks there, scanning them back creates duplicates).
+    """
     tasks = []
+    daily_dir = "daily"
+    if config:
+        daily_dir = config.get("paths", {}).get("daily_notes_dir", "daily")
+
+    excluded = EXCLUDED_DIRS | {daily_dir}
+    excluded_lower = {d.lower() for d in excluded}
 
     for md_file in vault_path.rglob("*.md"):
-        # Skip excluded directories
-        if any(part in EXCLUDED_DIRS for part in md_file.parts):
+        # Skip excluded directories (case-insensitive for daily_dir portability)
+        if any(part.lower() in excluded_lower for part in md_file.parts):
             continue
 
         rel_path = str(md_file.relative_to(vault_path))
@@ -115,7 +125,7 @@ def collect(config: dict) -> dict:
         log_with_data(logger, logging.ERROR, f"Vault not found: {vault_path}")
         return stats
 
-    tasks = scan_vault(vault_path)
+    tasks = scan_vault(vault_path, config)
     log_with_data(
         logger,
         logging.INFO,
