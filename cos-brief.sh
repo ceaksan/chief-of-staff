@@ -121,11 +121,13 @@ run_classify() {
 }
 
 run_sweep() {
-    local budget=$(read_cfg claude.sweep_budget 3.00)
-    local model=$(read_cfg claude.sweep_model opus)
-
-    echo "=== Step 3: Morning Sweep ==="
-    claude -p "$(cat prompts/sweep.md)" --max-budget-usd "$budget" --model "$model" --dangerously-skip-permissions 2>> logs/claude-sweep.log
+    hc_ping sweep /start
+    echo "=== Step 3: Morning Sweep (Orchestrator) ==="
+    if python collectors/orchestrator.py 2>> logs/claude-sweep.log; then
+        hc_ping sweep
+    else
+        hc_ping sweep /fail
+    fi
     echo ""
 }
 
@@ -371,8 +373,8 @@ case "$CMD" in
         case "$STEP" in
             full)
                 hc_ping pipeline /start
-                if run_collect && run_classify && run_sweep && run_render; then
-                    echo "=== Full pipeline complete ==="
+                if run_collect && run_classify && run_render; then
+                    echo "=== Overnight pipeline complete (sweep pending your review) ==="
                     run_status
                     hc_ping pipeline
                 else

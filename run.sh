@@ -326,8 +326,8 @@ with connect(get_db_path(config)) as conn:
 case "$STEP" in
     full)
         hc_ping pipeline /start
-        if run_collect && run_classify && run_sweep && run_render; then
-            echo "=== Full pipeline complete ==="
+        if run_collect && run_classify && run_render; then
+            echo "=== Overnight pipeline complete (sweep pending your review) ==="
             run_status
             hc_ping pipeline
         else
