@@ -82,6 +82,8 @@ MCP handles authentication. Connect once via Claude Code (`/mcp`), no API keys t
 |--------|--------|-----------------|
 | Feeds | `collectors/feed_collector.py` | Unread RSS/Atom entries from Miniflux (self-hosted). Fetches via REST API, no MCP needed. |
 | Health | `collectors/health_collector.py` | Per-project status from existing monitoring scripts: up/down, error count, last deploy. |
+| Cloudflare | `collectors/health_scripts/cloudflare_health.py` | Workers error rate and request count (GraphQL), Pages deployment status (REST API). |
+| Coolify | `collectors/health_scripts/coolify_health.py` | Application, service, and database status via Coolify API (through Cloudflare Tunnel). |
 | Tasks | `collectors/task_collector.py` | Open tasks from Obsidian vault (Dataview checkbox format), synced to SQLite. |
 
 ### Multi-Calendar Support
@@ -172,8 +174,8 @@ The overnight process produces a ready-to-review briefing:
 - Free: 07:00-10:00, 11:00-14:00, 14:30-18:00
 
 ## Project Status
-- OK: project-a, project-b, project-c
-- project-d: 3 errors (connection timeout)
+- OK: cf:worker-1, cf:site-1, coolify:app-1, coolify:db-1
+- coolify:old-service: error (exited:unhealthy)
 
 ## Classified Tasks
 
@@ -210,6 +212,9 @@ chief-of-staff/
 │   ├── feed_collector.py       # Miniflux REST API collector
 │   ├── task_collector.py       # Obsidian vault task scanner
 │   ├── health_collector.py     # Project health script runner
+│   └── health_scripts/
+│       ├── cloudflare_health.py  # Workers analytics + Pages deployments
+│       └── coolify_health.py     # Apps, services, databases via Coolify API
 │   ├── radar_collector.py      # Opportunity Radar signal importer
 │   ├── classifier.py           # Classification export/import CLI
 │   ├── sweep.py                # Sweep export/record/complete CLI
@@ -305,6 +310,17 @@ collector_time = "06:00"
 [classification]
 force_yours = ["pricing", "strategy", "contract"]
 force_dispatch = ["meeting confirmation", "calendar update"]
+
+[cloudflare]
+api_token = ""
+account_id = ""
+workers = ["my-worker-1"]
+pages = ["my-site"]
+
+[coolify]
+base_url = "https://your-coolify.example.com"
+api_token = ""
+exclude = ["unused-service"]
 ```
 
 ### Architecture Documentation (optional)
@@ -412,6 +428,7 @@ See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md`
 | Morning Sweep: 4 domain agents (Sonnet, $0.50 each) | ~$1.00-2.00/day |
 | Day Block (Sonnet) | ~$0.25-1.00/day |
 | Google APIs | Free (MCP handles auth) |
+| Platform health checks (Cloudflare + Coolify APIs) | Free |
 | **Total beyond subscription** | **~$5-15/month** |
 
 ## Inspiration

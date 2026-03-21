@@ -6,7 +6,7 @@ Local-first AI assistant that automates daily operational overhead for solo entr
 Living Architecture Template v1.0
 Source: https://github.com/ceaksan/living-architecture
 Depth: L2
-Last verified: 2026-03-20
+Last verified: 2026-03-21
 -->
 
 ## Stack & Dependencies
@@ -28,6 +28,7 @@ Last verified: 2026-03-20
 | AI | Claude Code CLI | Prompts executed via `claude -p` with budget caps |
 | Vault | Obsidian | Daily Notes output target |
 | RSS | Miniflux | Self-hosted, REST API for feed collection |
+| Health Monitoring | Cloudflare API + Coolify API | Workers, Pages, Apps, Services, Databases |
 | MCP | Gmail, Google Calendar | Claude-native connectors for email/calendar |
 
 ### Build & Test
@@ -52,6 +53,9 @@ chief-of-staff/
 │   ├── feed_collector.py        # Miniflux REST API -> feeds table
 │   ├── task_collector.py        # Obsidian vault grep -> tasks table
 │   ├── health_collector.py      # User health scripts -> health_checks table
+│   └── health_scripts/             # Platform-specific health collectors
+│       ├── cloudflare_health.py    # Workers analytics (GraphQL) + Pages deployments (REST)
+│       └── coolify_health.py       # Apps, services, databases via Coolify API
 │   ├── orchestrator.py          # Parallel sweep orchestrator (asyncio, semaphore concurrency)
 │   ├── radar_collector.py       # Opportunity Radar signal importer
 │   ├── classifier.py            # Pending items -> classifications (export/import CLI)
@@ -101,12 +105,12 @@ chief-of-staff/
                                         │
             ┌───────────────────────────┼───────────────────────────┐
             ▼                           ▼                           ▼
-    ┌───────────────┐          ┌───────────────┐          ┌───────────────┐
-    │ Claude + MCP  │          │  Python HTTP  │          │  Python grep  │
-    │ Gmail/Calendar│          │ Miniflux API  │          │ Obsidian vault│
-    └───────┬───────┘          └───────┬───────┘          └───────┬───────┘
-            │ .tmp/cos_*.json          │                          │
-            ▼                          ▼                          ▼
+    ┌───────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐
+    │ Claude + MCP  │  │ Python HTTP  │  │ Python HTTP  │  │  Python grep  │
+    │ Gmail/Calendar│  │ Miniflux API │  │ CF + Coolify │  │ Obsidian vault│
+    └───────┬───────┘  └──────┬───────┘  └──────┬───────┘  └───────┬───────┘
+            │ .tmp/cos_*.json          │              │           │
+            ▼                          ▼              ▼           ▼
     ┌──────────────────────────────────────────────────────────────┐
     │                     cos.db (SQLite WAL)                      │
     │  emails | events | tasks | health_checks | feeds             │
@@ -201,6 +205,8 @@ No HTTP routes. CLI-based pipeline:
 | `feed_collector.py` | (no args) | Miniflux API via config |
 | `task_collector.py` | (no args) | Obsidian vault path via config |
 | `health_collector.py` | (no args) | Health script paths via config |
+| `health_scripts/cloudflare_health.py` | (no args) | Cloudflare API via config |
+| `health_scripts/coolify_health.py` | (no args) | Coolify API via config |
 | `orchestrator.py` | `[--sequential] [--dry-run]` | cos.db (via sweep.py) |
 | `radar_collector.py` | (no args) | Opportunity Radar pending.json via config |
 | `classifier.py` | `export` / `import --json <path>` | cos.db |
@@ -368,6 +374,8 @@ runs (independent, execution log only)
 | `[miniflux]` | base_url, api_token, max_entries, lookback_hours, mark_read | RSS reader connection |
 | `[agents]` | content_write_folders, calendar_write_folders, max_workers | Vault write permissions + concurrency limit |
 | `[agents.*]` | budget, model, timeout | Per-agent Claude budget ($), model, timeout (seconds) |
+| `[cloudflare]` | api_token, account_id, workers, pages | Cloudflare API for Workers analytics + Pages deployments |
+| `[coolify]` | base_url, api_token, exclude | Coolify API for app/service/database monitoring |
 | `[radar]` | pending_json | Path to Opportunity Radar export |
 | `[code_review]` | reports_dir | Path to daily-code-review DIGEST.md output |
 
@@ -405,7 +413,6 @@ runs (independent, execution log only)
 ## Known Tech Debt
 
 ### High Priority
-- No TypeScript/JavaScript static analysis in health checks
 
 ### Medium Priority
 - Day Block layer (Layer 3) not implemented
@@ -415,6 +422,7 @@ runs (independent, execution log only)
 - No retry logic for failed Claude CLI calls
 
 ### Low Priority
+- No TypeScript/JavaScript static analysis in health checks
 - No historical trend tracking for classifications
 - No config validation/schema beyond TOML parsing
 - Cleanup only purges done/skipped/failed, not stale pending items
