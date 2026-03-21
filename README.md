@@ -138,7 +138,6 @@ On-demand. You trigger it when ready. `collectors/orchestrator.py` dispatches do
 
 | Agent | Scope | Model | Budget | Safety |
 |-------|-------|-------|--------|--------|
-| **Email Agent** | Gmail draft creation | Opus | $1.00 | Never sends |
 | **Calendar Agent** | Meeting prep notes | Sonnet | $0.50 | Read-only |
 | **Health Agent** | Error analysis + fix direction | Sonnet | $0.50 | No code patches |
 | **Task Agent** | Task completion notes, research | Sonnet | $0.50 | Scoped vault folders |
@@ -395,7 +394,7 @@ See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md`
 
 | Rule | Implementation |
 |------|---------------|
-| Never send emails | Email Agent creates drafts only via MCP `gmail_create_draft`. |
+| No auto-email | Emails are classified but no agent creates drafts. You handle email manually. |
 | Budget caps | Each Claude invocation has a `--max-budget-usd` flag. Per-agent caps prevent runaway spend. |
 | Mutex | `shlock` lockfile prevents parallel runs. |
 | Idempotency | `INSERT OR IGNORE` on unique source+id index. |
@@ -410,7 +409,7 @@ See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md`
 |-----------|------|
 | Claude Max subscription | $100/month (required) |
 | Overnight Collection + Classifier (Sonnet) | ~$1.00-3.00/day |
-| Morning Sweep: Email Agent (Opus, $1.00) + 4x domain agents (Sonnet, $0.50 each) | ~$1.00-3.00/day |
+| Morning Sweep: 4 domain agents (Sonnet, $0.50 each) | ~$1.00-2.00/day |
 | Day Block (Sonnet) | ~$0.25-1.00/day |
 | Google APIs | Free (MCP handles auth) |
 | **Total beyond subscription** | **~$5-15/month** |
