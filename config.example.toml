@@ -79,6 +79,7 @@ reports_dir = ""
 pipeline_url = ""    # full pipeline run
 feed_url = ""        # standalone feed collector
 weekly_url = ""      # weekly stats digest
+sweep_url = ""       # morning sweep orchestrator
 
 [projects]
 # Map vault directory names to human-readable project names

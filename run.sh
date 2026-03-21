@@ -75,14 +75,24 @@ run_classify() {
 }
 
 run_sweep() {
+    hc_ping sweep /start
     echo "=== Step 4: Morning Sweep (Orchestrator) ==="
-    python collectors/orchestrator.py 2>> logs/claude-sweep.log
+    if python collectors/orchestrator.py 2>> logs/claude-sweep.log; then
+        hc_ping sweep
+    else
+        hc_ping sweep /fail
+    fi
     echo ""
 }
 
 run_sweep_seq() {
+    hc_ping sweep /start
     echo "=== Step 4: Morning Sweep (Sequential) ==="
-    python collectors/orchestrator.py --sequential 2>> logs/claude-sweep.log
+    if python collectors/orchestrator.py --sequential 2>> logs/claude-sweep.log; then
+        hc_ping sweep
+    else
+        hc_ping sweep /fail
+    fi
     echo ""
 }
 
