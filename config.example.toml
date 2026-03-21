@@ -54,6 +54,15 @@ gym_duration = 90
 # leetty = "/path/to/leetty/health.py"
 # validough = "/path/to/validough/health.py"
 
+[cloudflare]
+# Cloudflare API token (needs: Read analytics and logs + Cloudflare Pages Read)
+api_token = ""
+account_id = ""
+# Worker names to monitor (from Cloudflare dashboard)
+workers = ["my-worker-1", "my-worker-2"]
+# Pages project names to monitor
+pages = ["my-site", "my-docs"]
+
 [miniflux]
 # Self-hosted Miniflux RSS reader (https://miniflux.app)
 base_url = "https://your-miniflux-instance.example.com"

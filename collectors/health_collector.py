@@ -118,6 +118,49 @@ def run_health_script(project: str, script_path: str) -> dict | None:
     }
 
 
+def run_platform_script(script_path: str, config: dict) -> list[dict]:
+    """Run a platform health script that returns a JSON array of results."""
+    path = Path(script_path).expanduser()
+    if not path.exists():
+        log_with_data(logger, logging.WARNING, f"Platform script not found: {path}")
+        return []
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=SCRIPT_TIMEOUT,
+            cwd=path.parent,
+        )
+    except subprocess.TimeoutExpired:
+        log_with_data(logger, logging.ERROR, f"Platform script timed out: {path}")
+        return []
+
+    if result.returncode != 0:
+        log_with_data(
+            logger,
+            logging.ERROR,
+            f"Platform script failed: {path}",
+            {"stderr": result.stderr[:500]},
+        )
+        return []
+
+    try:
+        data = json.loads(result.stdout.strip())
+        if isinstance(data, list):
+            return data
+        return []
+    except json.JSONDecodeError as e:
+        log_with_data(logger, logging.ERROR, f"Invalid JSON from platform script: {e}")
+        return []
+
+
+PLATFORM_SCRIPTS = {
+    "cloudflare": Path(__file__).parent / "health_scripts" / "cloudflare_health.py",
+}
+
+
 def collect(config: dict) -> dict:
     """Run all health scripts and write results to cos.db."""
     projects = config.get("health", {}).get("projects", {})
@@ -126,13 +169,10 @@ def collect(config: dict) -> dict:
 
     stats = {"processed": 0, "failed": 0, "skipped": 0}
 
-    if not projects:
-        log_with_data(logger, logging.INFO, "No health projects configured, skipping")
-        return stats
-
     with connect(db_path) as conn:
         run_id = start_run(conn, "collector", source="health")
 
+        # Per-project health scripts (existing)
         for project, script_path in projects.items():
             result = run_health_script(project, script_path)
             if result is None:
@@ -150,6 +190,24 @@ def collect(config: dict) -> dict:
                 )
             else:
                 stats["skipped"] += 1
+
+        # Platform health scripts (Cloudflare, etc.)
+        for platform, script_path in PLATFORM_SCRIPTS.items():
+            if not config.get(platform):
+                continue
+            results = run_platform_script(str(script_path), config)
+            for result in results:
+                queue_id = insert_health_check(conn, result)
+                if queue_id is not None:
+                    stats["processed"] += 1
+                    log_with_data(
+                        logger,
+                        logging.INFO,
+                        f"Collected {platform} health for {result['project']}",
+                        {"status": result["status"]},
+                    )
+                else:
+                    stats["skipped"] += 1
 
         status = "completed" if stats["failed"] == 0 else "partial"
         finish_run(
