@@ -158,6 +158,7 @@ def run_platform_script(script_path: str, config: dict) -> list[dict]:
 
 PLATFORM_SCRIPTS = {
     "cloudflare": Path(__file__).parent / "health_scripts" / "cloudflare_health.py",
+    "coolify": Path(__file__).parent / "health_scripts" / "coolify_health.py",
 }
 
 

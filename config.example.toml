@@ -54,6 +54,11 @@ gym_duration = 90
 # leetty = "/path/to/leetty/health.py"
 # validough = "/path/to/validough/health.py"
 
+[coolify]
+# Coolify API (via Cloudflare Tunnel or direct)
+base_url = "https://your-coolify.example.com"
+api_token = ""
+
 [cloudflare]
 # Cloudflare API token (needs: Read analytics and logs + Cloudflare Pages Read)
 api_token = ""
