@@ -23,24 +23,19 @@ def test_group_items_by_agent():
         ],
         "prep": [
             {"queue_id": 3, "domain_type": "event", "title": "Event 1"},
-            {"queue_id": 4, "domain_type": "email", "title": "Email 2"},
+            {"queue_id": 4, "domain_type": "task", "title": "Task 1"},
         ],
     }
     result = group_items_by_agent(items)
 
-    assert "email" in result
+    # email excluded from agent dispatch (classification only)
+    assert "email" not in result
     assert "health" in result
     assert "calendar" in result
-    assert len(result["email"]) == 2
+    assert "task" in result
     assert len(result["health"]) == 1
     assert len(result["calendar"]) == 1
-
-    # Verify category tagging
-    email_items = result["email"]
-    dispatch_items = [i for i in email_items if i["category"] == "dispatch"]
-    prep_items = [i for i in email_items if i["category"] == "prep"]
-    assert len(dispatch_items) == 1
-    assert len(prep_items) == 1
+    assert len(result["task"]) == 1
 
 
 def test_group_items_empty():

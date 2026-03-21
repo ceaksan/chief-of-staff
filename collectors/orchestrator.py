@@ -26,7 +26,7 @@ from collectors.sweep import apply_actions, export_sweep_items, mark_done
 logger = get_logger("orchestrator")
 
 DOMAIN_TO_AGENT = {
-    "email": "email",
+    # "email" excluded: classification only, no auto-drafting
     "event": "calendar",
     "health": "health",
     "task": "task",
