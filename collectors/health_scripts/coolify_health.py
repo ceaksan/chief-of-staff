@@ -69,12 +69,19 @@ def short_name(full_name: str) -> str:
     return cleaned
 
 
-def fetch_resources(base_url: str, token: str) -> list[dict]:
+def fetch_resources(
+    base_url: str, token: str, exclude: list[str] | None = None
+) -> list[dict]:
     """Fetch all Coolify resources (apps, services, databases)."""
     headers = get_headers(token)
+    exclude_set = set(exclude or [])
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
     results = []
+
+    def is_excluded(raw_name: str) -> bool:
+        clean = short_name(raw_name)
+        return clean in exclude_set or raw_name in exclude_set
 
     with httpx.Client(timeout=15) as client:
         # Applications
@@ -82,6 +89,8 @@ def fetch_resources(base_url: str, token: str) -> list[dict]:
             resp = client.get(f"{base_url}/api/v1/applications", headers=headers)
             resp.raise_for_status()
             for app in resp.json():
+                if is_excluded(app.get("name", "")):
+                    continue
                 name = short_name(app.get("name", "unknown"))
                 raw_status = app.get("status", "")
                 status = parse_coolify_status(raw_status)
@@ -112,6 +121,8 @@ def fetch_resources(base_url: str, token: str) -> list[dict]:
             resp = client.get(f"{base_url}/api/v1/services", headers=headers)
             resp.raise_for_status()
             for svc in resp.json():
+                if is_excluded(svc.get("name", "")):
+                    continue
                 name = short_name(svc.get("name", "unknown"))
                 raw_status = svc.get("status", "")
                 status = parse_coolify_status(raw_status)
@@ -139,6 +150,8 @@ def fetch_resources(base_url: str, token: str) -> list[dict]:
             resp = client.get(f"{base_url}/api/v1/databases", headers=headers)
             resp.raise_for_status()
             for db in resp.json():
+                if is_excluded(db.get("name", "")):
+                    continue
                 name = short_name(db.get("name", "unknown"))
                 raw_status = db.get("status", "")
                 status = parse_coolify_status(raw_status)
@@ -181,7 +194,8 @@ def main():
         print(json.dumps([]))
         return
 
-    results = fetch_resources(base_url, token)
+    exclude = coolify_config.get("exclude", [])
+    results = fetch_resources(base_url, token, exclude=exclude)
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
 
