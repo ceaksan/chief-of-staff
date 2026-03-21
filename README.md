@@ -234,6 +234,8 @@ chief-of-staff/
 ├── schema.sql                  # SQLite schema (9 tables, 5 views)
 ├── renderer.py                 # SQLite -> Obsidian Daily Note
 ├── run.sh                      # Pipeline orchestrator (mutex, step routing)
+├── cos-brief.sh                # Unified CLI (brief, run, status, weekly, insights, cleanup)
+├── setup_wizard.py             # Interactive setup (config + db + launchd)
 ├── config.toml                 # User config (gitignored)
 └── config.example.toml         # Config template
 ```
@@ -258,8 +260,30 @@ git clone https://github.com/ceaksan/chief-of-staff.git ~/.chief-of-staff
 cd ~/.chief-of-staff
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+#### Option A: Setup Wizard (recommended)
+
+The interactive wizard walks you through configuration, initializes the database, and sets up scheduling:
+
+```bash
+python setup_wizard.py
+```
+
+It reads `config.example.toml` as a template and generates `config.toml` with your values. Each step is skippable with sensible defaults. Optional integrations (Miniflux, Coolify, Cloudflare, healthchecks.io) are prompted separately.
+
+To validate an existing config:
+
+```bash
+python setup_wizard.py --validate
+```
+
+#### Option B: Manual Setup
+
+```bash
 cp config.example.toml config.toml
 # Edit config.toml with your paths and rules
+sqlite3 cos.db < schema.sql
 ```
 
 ### MCP Authentication
@@ -279,30 +303,22 @@ No API keys or Google Cloud Console needed. Claude Code handles OAuth via its bu
 
 For multi-calendar access, share other Google account calendars to your primary account (Google Calendar > Settings > Share with specific people > your primary email).
 
-### Configuration
+### Configuration Reference
 
-Edit `config.toml`:
+See `config.example.toml` for all available settings. Key sections:
 
 ```toml
 [paths]
 obsidian_vault = "/path/to/your/vault"
 daily_notes_dir = "Daily"
-health_scripts_dir = "/path/to/your/monitoring/scripts"
 
 [calendars]
-# Calendar IDs to scan (from gcal_list_calendars output)
-ids = [
-    "primary",
-    "shared-reader@example.com",
-    "other-reader@example.com",
-]
-ai_plan_calendar_id = ""  # created during setup
+ids = ["primary", "shared@example.com"]
 
 [claude]
-collector_budget = 2.00
+collector_budget = 2.00    # per-run budget cap
 classifier_budget = 1.50
 sweep_budget = 3.00
-dayblock_budget = 1.00
 
 [schedule]
 collector_time = "06:00"
@@ -311,13 +327,13 @@ collector_time = "06:00"
 force_yours = ["pricing", "strategy", "contract"]
 force_dispatch = ["meeting confirmation", "calendar update"]
 
-[cloudflare]
+[cloudflare]             # optional: Workers & Pages monitoring
 api_token = ""
 account_id = ""
 workers = ["my-worker-1"]
 pages = ["my-site"]
 
-[coolify]
+[coolify]                # optional: container monitoring
 base_url = "https://your-coolify.example.com"
 api_token = ""
 exclude = ["unused-service"]
@@ -353,26 +369,40 @@ The renderer reads `{reports_dir}/{YYYY-MM-DD}/DIGEST.md` and adds a **Code Heal
 ```bash
 cd /path/to/chief-of-staff
 
-./run.sh              # full pipeline (collect + classify + sweep + render)
+./run.sh              # overnight pipeline (collect + classify + render)
 ./run.sh collect      # collection only (Gmail, Calendar, Feeds, Tasks, Health)
 ./run.sh classify     # classification only
-./run.sh sweep        # morning sweep only (parallel agents)
+./run.sh sweep        # morning sweep only (parallel agents, manual trigger)
 ./run.sh sweep-seq    # morning sweep (sequential, for debugging)
 ./run.sh render       # re-render daily note only
 ./run.sh status       # show pipeline status
 ./run.sh weekly       # weekly stats digest
 ./run.sh insights     # scheduling insights
 ./run.sh cleanup 30   # purge records older than 30 days
+
+# Unified CLI (same commands, used by launchd):
+./cos-brief.sh run full    # overnight pipeline
+./cos-brief.sh run sweep   # morning sweep
+./cos-brief.sh status      # pipeline status
+./cos-brief.sh weekly      # weekly digest
+./cos-brief.sh brief       # interactive morning brief
 ```
 
 ### Schedule Setup (optional)
 
-LaunchAgent runs the full pipeline at 09:00. Requires Mac to be awake.
+The setup wizard handles this automatically. For manual setup:
 
 ```bash
+# macOS (launchd)
+# Edit com.chief-of-staff.overnight.plist: replace /path/to/chief-of-staff with your path
 cp com.chief-of-staff.overnight.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.chief-of-staff.overnight.plist
+
+# Linux (crontab alternative)
+# 0 6 * * * cd /path/to/chief-of-staff && ./cos-brief.sh run full
 ```
+
+The overnight pipeline runs collect + classify + render. Sweep is excluded and triggered manually after reviewing the Daily Note.
 
 ### Shell Aliases
 
@@ -448,11 +478,14 @@ This project was inspired by [Mimi Urchison's Claude Chief of Staff](https://git
 - [x] Phase 1-4: Core collectors and renderer
 - [x] Phase 5: Overnight classifier
 - [x] Phase 6: Morning Sweep with parallel subagents
+- [x] Cloudflare + Coolify platform health monitoring
+- [x] Setup wizard (interactive config + db + launchd)
+- [x] healthchecks.io monitoring for pipeline and sweep
 - [ ] Phase 7: Day Block with AI Plan calendar
+- [ ] Vercel + Neon health collectors
 - [ ] Retry logic for failed Claude CLI calls
 - [ ] Interactive approval UI (classification review before sweep)
 - [ ] Trend tracking (classification time series)
-- [ ] Hetzner migration option (Docker + sync)
 
 ## License
 

@@ -89,6 +89,7 @@ chief-of-staff/
 ├── renderer.py                  # SQLite -> Obsidian Daily Note markdown
 ├── run.sh                       # Pipeline orchestrator (mutex, step routing)
 ├── cos-brief.sh                 # CLI brief generator
+├── setup_wizard.py              # Interactive setup (config + db + launchd)
 ├── config.toml                  # User config (gitignored)
 ├── config.example.toml          # Config template
 └── com.chief-of-staff.overnight.plist  # launchd schedule (gitignored)
@@ -96,7 +97,7 @@ chief-of-staff/
 
 ## Data Flow
 
-### Full Pipeline (collect -> classify -> sweep -> render)
+### Full Pipeline (collect -> classify -> render; sweep is manual)
 
 ```
                     ┌──────────────────────────────────────────────┐
@@ -135,13 +136,14 @@ chief-of-staff/
     └───┬───────┬───────┬───────┬───────┬───┘
         │       │       │       │       │
         ▼       ▼       ▼       ▼       ▼
-    ┌──────┐┌──────┐┌──────┐┌──────┐┌──────┐
-    │email ││cal   ││health││task  ││feed  │
-    │agent ││agent ││agent ││agent ││agent │
-    │(Opus)││(Son.)││(Son.)││(Son.)││(Son.)│
-    └──┬───┘└──┬───┘└──┬───┘└──┬───┘└──┬───┘
-       │       │       │       │       │
-       └───────┴───────┴───────┴───────┘
+    ┌──────┐┌──────┐┌──────┐┌──────┐
+    │cal   ││health││task  ││feed  │
+    │agent ││agent ││agent ││agent │
+    │(Son.)││(Son.)││(Son.)││(Son.)│
+    └──┬───┘└──┬───┘└──┬───┘└──┬───┘
+       │       │       │       │
+       └───────┴───────┴───────┘
+       (email agent exists but excluded from dispatch)
                        │
                        ▼
                .tmp/*_output.json
@@ -376,6 +378,7 @@ runs (independent, execution log only)
 | `[agents.*]` | budget, model, timeout | Per-agent Claude budget ($), model, timeout (seconds) |
 | `[cloudflare]` | api_token, account_id, workers, pages | Cloudflare API for Workers analytics + Pages deployments |
 | `[coolify]` | base_url, api_token, exclude | Coolify API for app/service/database monitoring |
+| `[healthchecks]` | pipeline_url, feed_url, sweep_url, weekly_url | Healthchecks.io ping URLs for monitoring |
 | `[radar]` | pending_json | Path to Opportunity Radar export |
 | `[code_review]` | reports_dir | Path to daily-code-review DIGEST.md output |
 
@@ -424,7 +427,7 @@ runs (independent, execution log only)
 ### Low Priority
 - No TypeScript/JavaScript static analysis in health checks
 - No historical trend tracking for classifications
-- No config validation/schema beyond TOML parsing
+- Config validation limited to `setup_wizard.py --validate` (no schema enforcement at runtime)
 - Cleanup only purges done/skipped/failed, not stale pending items
 - No diff-based review for health checks (re-processes unchanged data)
 
@@ -446,7 +449,7 @@ runs (independent, execution log only)
 
 | Job | Trigger | Purpose | Retry | Timeout |
 |-----|---------|---------|-------|---------|
-| Full pipeline | launchd, daily at configured time | Collect + classify + sweep + render | No auto-retry, logs to `logs/` | Per-step Claude budget cap |
+| Full pipeline | launchd, daily at configured time | Collect + classify + render (sweep excluded, manual trigger) | No auto-retry, logs to `logs/` | Per-step Claude budget cap |
 | Collection | Manual via `./run.sh collect` | Data gathering only | Source failure isolated, continues with others | Budget cap per source |
 | Classification | Manual or part of full pipeline | Classify pending items | Idempotent, safe to re-run | Classifier budget cap |
 | Morning Sweep | Manual or part of full pipeline | Execute dispatch/prep items | Failed actions logged, item stays in queue | Sweep budget cap |
