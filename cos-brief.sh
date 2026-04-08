@@ -16,7 +16,7 @@ Commands:
   (no command)    Morning brief (default)
   brief           Morning brief (same as no command)
   run [step]      Run pipeline
-                    steps: full (default), collect, classify, sweep, render
+                    steps: full (default), collect, classify, sweep, sweep-seq, render
   status          Pipeline status (last 24h)
   weekly          Weekly stats digest
   insights        Scheduling insights (30d patterns)
@@ -124,6 +124,17 @@ run_sweep() {
     hc_ping sweep /start
     echo "=== Step 3: Morning Sweep (Orchestrator) ==="
     if python collectors/orchestrator.py 2>> logs/claude-sweep.log; then
+        hc_ping sweep
+    else
+        hc_ping sweep /fail
+    fi
+    echo ""
+}
+
+run_sweep_seq() {
+    hc_ping sweep /start
+    echo "=== Step 3: Morning Sweep (Sequential) ==="
+    if python collectors/orchestrator.py --sequential 2>> logs/claude-sweep.log; then
         hc_ping sweep
     else
         hc_ping sweep /fail
@@ -386,10 +397,11 @@ case "$CMD" in
             collect)  run_collect ;;
             classify) run_classify ;;
             sweep)    run_sweep ;;
+            sweep-seq) run_sweep_seq ;;
             render)   run_render ;;
             *)
                 echo "Unknown step: $STEP"
-                echo "Usage: cos run [full|collect|classify|sweep|render]"
+                echo "Usage: cos run [full|collect|classify|sweep|sweep-seq|render]"
                 exit 1
                 ;;
         esac
