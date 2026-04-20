@@ -21,6 +21,9 @@ Commands:
   weekly          Weekly stats digest
   insights        Scheduling insights (30d patterns)
   cleanup [days]  Purge old data (default: 30 days)
+  taste [sub]     Personal interest filter
+                    subs: status, weekly, label, score, rebuild,
+                          vault, starred, audit, report
   help            Show this help
 
 Examples:
@@ -108,6 +111,24 @@ run_collect() {
     fi
     python collectors/health_collector.py 2>/dev/null || echo "  (health collector skipped - no scripts configured)"
     python collectors/task_collector.py
+
+    echo "=== Step 2b: Taste scoring (starred sync + embed + rescore) ==="
+    python collectors/taste_starred_sync.py 2>> logs/taste.log || echo "  (starred sync failed)"
+    python -c "
+from cos.taste import ensure_schema, embed_missing, build_centroids, score_all, bucket_counts
+from cos.db import connect, get_db_path
+p = get_db_path()
+ensure_schema(p)
+n = embed_missing()
+print(f'embedded new: {n}')
+cent = build_centroids(db_path=p)
+if cent.n_relevant == 0:
+    print('  no relevant labels yet, skipping score')
+else:
+    with connect(p) as c: c.execute('DELETE FROM taste_scores')
+    scored = score_all(cent, db_path=p)
+    print(f'scored: {scored}  buckets: {bucket_counts(p)}')
+" 2>> logs/taste.log || echo "  (taste scoring failed, see logs/taste.log)"
     echo ""
 }
 
@@ -369,6 +390,78 @@ with connect(get_db_path(config)) as conn:
 "
 }
 
+run_taste() {
+    local sub="${1:-status}"
+    case "$sub" in
+        status)
+            python -c "
+from cos.taste import ensure_schema, label_counts, bucket_counts, build_centroids
+from cos.db import get_db_path, connect
+p = get_db_path()
+ensure_schema(p)
+print('labels:  ', label_counts(p))
+print('buckets: ', bucket_counts(p))
+with connect(p) as c:
+    total = c.execute('SELECT COUNT(*) FROM feeds').fetchone()[0]
+    unlabeled = c.execute('SELECT COUNT(*) FROM feeds f LEFT JOIN taste_labels l ON l.feed_id=f.id WHERE l.feed_id IS NULL').fetchone()[0]
+    embedded = c.execute('SELECT COUNT(DISTINCT feed_id) FROM taste_embeddings').fetchone()[0]
+print(f'feeds:    total={total} embedded={embedded} unlabeled={unlabeled}')
+cent = build_centroids(db_path=p)
+print(f'centroids: relevant_n={cent.n_relevant} not_relevant_n={cent.n_not_relevant} dim={cent.dim}')
+"
+            ;;
+        weekly)
+            python collectors/taste_weekly.py
+            ;;
+        label)
+            shift
+            python collectors/taste_label.py "$@"
+            ;;
+        score)
+            python -c "
+from cos.taste import embed_missing, build_centroids, score_all, bucket_counts
+from cos.db import connect, get_db_path
+n = embed_missing()
+print(f'embedded: {n}')
+cent = build_centroids()
+with connect(get_db_path()) as c: c.execute('DELETE FROM taste_scores')
+scored = score_all(cent)
+print(f'scored: {scored}  buckets: {bucket_counts()}')
+"
+            ;;
+        rebuild)
+            python -c "
+from cos.taste import build_centroids, score_all, bucket_counts
+from cos.db import connect, get_db_path
+cent = build_centroids()
+with connect(get_db_path()) as c: c.execute('DELETE FROM taste_scores')
+scored = score_all(cent)
+print(f'rebuilt -> scored: {scored}  buckets: {bucket_counts()}')
+"
+            ;;
+        vault)
+            shift
+            python collectors/vault_label.py "$@"
+            ;;
+        starred)
+            shift
+            python collectors/taste_starred_sync.py "$@"
+            ;;
+        audit)
+            shift
+            python collectors/taste_feed_audit.py "$@"
+            ;;
+        report)
+            python collectors/taste_report.py
+            ;;
+        *)
+            echo "Unknown taste sub: $sub"
+            echo "Usage: cos taste [status|weekly|label|score|rebuild]"
+            exit 1
+            ;;
+    esac
+}
+
 # --- Main ---
 CMD="${1:-brief}"
 
@@ -384,8 +477,8 @@ case "$CMD" in
         case "$STEP" in
             full)
                 hc_ping pipeline /start
-                if run_collect && run_classify && run_render; then
-                    echo "=== Overnight pipeline complete (sweep pending your review) ==="
+                if run_collect && run_classify && run_sweep && run_render; then
+                    echo "=== Overnight pipeline complete ==="
                     run_status
                     hc_ping pipeline
                 else
@@ -423,6 +516,11 @@ case "$CMD" in
         acquire_lock
         source .venv/bin/activate
         run_cleanup "$2"
+        ;;
+    taste)
+        source .venv/bin/activate
+        shift
+        run_taste "$@"
         ;;
     help|--help|-h)
         show_help

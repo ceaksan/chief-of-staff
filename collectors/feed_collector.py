@@ -72,6 +72,8 @@ def fetch_entries(config: dict, limit: int | None = None) -> list[dict]:
 
 def parse_entry(entry: dict) -> dict:
     """Parse a Miniflux entry into our feeds schema."""
+    from cos.language import detect as detect_language
+
     content = entry.get("content", "") or ""
     if len(content) > 2000:
         content = content[:2000]
@@ -83,11 +85,14 @@ def parse_entry(entry: dict) -> dict:
         if cat not in tags:
             tags.append(cat)
 
+    title = entry.get("title", "Untitled")
+    language = detect_language(f"{title} {content}")
+
     return {
         "id": str(entry["id"]),
         "feed_id": entry.get("feed_id", 0),
         "feed_title": entry.get("feed", {}).get("title", "Unknown"),
-        "title": entry.get("title", "Untitled"),
+        "title": title,
         "url": entry.get("url", ""),
         "author": entry.get("author", ""),
         "content": content,
@@ -97,6 +102,7 @@ def parse_entry(entry: dict) -> dict:
         "reading_time": reading_time,
         "tags": tags,
         "priority": estimate_priority(reading_time),
+        "language": language,
     }
 
 

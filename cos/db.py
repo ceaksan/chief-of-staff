@@ -149,11 +149,14 @@ def insert_health_check(conn: sqlite3.Connection, check: dict) -> int | None:
 
 
 def insert_feed(conn: sqlite3.Connection, feed: dict) -> int | None:
-    """Insert feed entry and create work queue entry. Returns queue_id or None if duplicate."""
+    """Insert feed entry and create work queue entry. Returns queue_id or None if duplicate.
+
+    feed["language"] (optional) is populated upstream via cos.language.detect.
+    """
     try:
         conn.execute(
-            """INSERT INTO feeds (id, feed_id, feed_title, title, url, author, content, published_at, reading_time, tags)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO feeds (id, feed_id, feed_title, title, url, author, content, published_at, reading_time, tags, language)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 feed["id"],
                 feed["feed_id"],
@@ -165,6 +168,7 @@ def insert_feed(conn: sqlite3.Connection, feed: dict) -> int | None:
                 feed["published_at"],
                 feed.get("reading_time", 0),
                 json.dumps(feed.get("tags", [])),
+                feed.get("language"),
             ),
         )
     except sqlite3.IntegrityError:

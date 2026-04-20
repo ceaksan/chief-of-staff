@@ -6,7 +6,7 @@ Local-first AI assistant that automates daily operational overhead for solo entr
 Living Architecture Template v1.0
 Source: https://github.com/ceaksan/living-architecture
 Depth: L2
-Last verified: 2026-03-21
+Last verified: 2026-04-21
 -->
 
 ## Stack & Dependencies
@@ -18,6 +18,8 @@ Last verified: 2026-03-21
 | Python | 3.12+ | Core runtime |
 | SQLite | 3.x (stdlib) | Local database, WAL mode |
 | tomllib | stdlib (3.11+) | Config parsing |
+| httpx | 0.27+ | Miniflux + Ollama HTTP calls |
+| langdetect | 1.0+ | Feed language detection at ingestion |
 
 ### Infrastructure
 
@@ -30,6 +32,7 @@ Last verified: 2026-03-21
 | RSS | Miniflux | Self-hosted, REST API for feed collection |
 | Health Monitoring | Cloudflare API + Coolify API | Workers, Pages, Apps, Services, Databases |
 | MCP | Gmail, Google Calendar | Claude-native connectors for email/calendar |
+| Embeddings | Ollama (Mac mini over Tailscale) | `multilingual-e5-large` (1024 dim) for taste filter; no API cost |
 
 ### Build & Test
 
@@ -45,7 +48,9 @@ chief-of-staff/
 ├── cos/                         # Core library (shared across all layers)
 │   ├── config.py                # TOML config loader
 │   ├── db.py                    # SQLite access layer, all insert/query/cleanup functions
-│   └── log.py                   # Structured JSON logging (daily rotation)
+│   ├── log.py                   # Structured JSON logging (daily rotation)
+│   ├── language.py              # TR/EN detection at ingestion (langdetect + heuristic)
+│   └── taste.py                 # Embedding, centroid, scoring, migration helper
 │
 ├── collectors/                  # Data collection + pipeline stages
 │   ├── calendar_collector.py    # Google Calendar MCP response -> events table
@@ -59,7 +64,14 @@ chief-of-staff/
 │   ├── orchestrator.py          # Parallel sweep orchestrator (asyncio, semaphore concurrency)
 │   ├── radar_collector.py       # Opportunity Radar signal importer
 │   ├── classifier.py            # Pending items -> classifications (export/import CLI)
-│   └── sweep.py                 # Morning sweep dispatcher (export/record/complete CLI)
+│   ├── sweep.py                 # Morning sweep dispatcher (export/record/complete CLI)
+│   ├── feed_backfill.py         # One-shot paginated Miniflux backfill (history import)
+│   ├── taste_label.py           # Interactive terminal labeling TUI (active-learning order)
+│   ├── taste_weekly.py          # Weekly check-in: uncertainty + sanity + rescue queues
+│   ├── taste_starred_sync.py    # Miniflux starred -> relevant auto-label (nightly)
+│   ├── vault_label.py           # Vault URL scan -> relevant auto-label (periodic)
+│   ├── taste_feed_audit.py      # Per-feed noise/signal audit (unsubscribe candidates)
+│   └── taste_report.py          # Full-corpus metrics + top-bucket samples
 │
 ├── prompts/                     # Claude system prompts (executed via claude -p)
 │   ├── collect.md               # MCP collection instructions
@@ -85,10 +97,15 @@ chief-of-staff/
 │   ├── test_sweep.py
 │   └── test_orchestrator.py
 │
-├── schema.sql                   # Full SQLite schema (9 tables, 5 views)
+├── schema.sql                   # Full SQLite schema (core tables + views)
+├── migrations/                  # Schema migrations (taste tables, language, tiers)
+│   ├── 001_add_radar.sql
+│   ├── 002_add_taste.sql
+│   ├── 003_add_language.sql
+│   └── 004_taste_high_keep.sql
 ├── renderer.py                  # SQLite -> Obsidian Daily Note markdown
 ├── run.sh                       # Pipeline orchestrator (mutex, step routing)
-├── cos-brief.sh                 # CLI brief generator
+├── cos-brief.sh                 # Unified CLI (brief, run, status, weekly, insights, taste subcommands)
 ├── setup_wizard.py              # Interactive setup (config + db + launchd)
 ├── config.toml                  # User config (gitignored)
 ├── config.example.toml          # Config template
@@ -179,6 +196,33 @@ classifications table (audit trail: model, prompt_version, reason)
 work_queue status -> "classified"
 ```
 
+### Taste Filter Flow (Layer 1.7)
+
+Runs as step 2b inside `run_collect`, after feeds land in `cos.db`.
+
+```
+new feeds  ->  language detection (tr/en kept, others parked)
+                         │
+                         ▼
+    Miniflux starred sync  -->  taste_labels (implicit relevant)
+                         │
+                         ▼
+    Ollama /api/embed (Mac mini over Tailscale)  -->  taste_embeddings
+                         │
+                         ▼
+    build_centroids (mean of 'relevant' vs 'not_relevant' vectors)
+                         │
+                         ▼
+    score_all: cos(item, rel) - cos(item, not_rel)
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼              ▼
+    high_keep      auto_keep      borderline     auto_drop
+  (daily brief) (weekly digest) (label queue)    (silent)
+```
+
+Explicit `not_relevant` always beats implicit positive signals (starred, vault). Non-TR/EN items never reach scoring — they're parked with their `language` tag and can be revisited with language-specific models later.
+
 ## Route / API Structure
 
 No HTTP routes. CLI-based pipeline:
@@ -197,6 +241,20 @@ No HTTP routes. CLI-based pipeline:
 | `./run.sh render` | Regenerate Daily Note from cos.db | None |
 | `./run.sh status` | Show pipeline stats | None |
 | `./run.sh cleanup [days]` | Purge old records (default 30 days) | None |
+
+### cos-brief.sh taste Subcommands
+
+| Command | Description | Compute |
+|---------|-------------|---------|
+| `cos taste status` | Label + bucket summary, centroid stats | None |
+| `cos taste weekly` | 3-section check-in (uncertainty + sanity + rescue), auto-rebuild | Ollama (on labeled set) |
+| `cos taste label [--feed NAME] [--order recent|uncertainty]` | Interactive terminal labeling | None |
+| `cos taste score` | Embed new feeds + rescore all | Ollama (batched) |
+| `cos taste rebuild` | Recompute centroids + rescore (after threshold changes) | None (vectors cached) |
+| `cos taste vault [--dry-run]` | Scan Obsidian vault URLs -> auto-label relevant | None |
+| `cos taste starred [--dry-run]` | Sync Miniflux starred -> auto-label relevant, ingest older starred | None |
+| `cos taste audit [--min-items N]` | Per-feed noise/signal audit | None |
+| `cos taste report` | Full-corpus metrics + bucket samples | None |
 
 ### Collector CLIs
 
@@ -275,6 +333,7 @@ No HTTP routes. CLI-based pipeline:
 | url | TEXT | Entry URL |
 | reading_time | INTEGER | Minutes |
 | tags | TEXT | JSON array |
+| language | TEXT | Detected language: `tr`, `en`, `other`, `und` |
 
 **radar_entries**
 
@@ -331,6 +390,38 @@ No HTTP routes. CLI-based pipeline:
 | status | TEXT | running / completed / failed / partial |
 | items_processed | INTEGER | Count |
 | budget_used | REAL | Claude API cost in USD |
+
+### Taste Filter Tables
+
+**taste_labels** (explicit and implicit labels on feed items)
+
+| Column | Type | Detail |
+|--------|------|--------|
+| feed_id | TEXT PK FK | References feeds.id (CASCADE) |
+| label | TEXT | `relevant` / `not_relevant` / `maybe` |
+| labeled_at | TEXT | ISO datetime |
+| notes | TEXT | Free-form note (e.g. `auto: miniflux starred`) |
+
+**taste_embeddings** (cached vectors per model)
+
+| Column | Type | Detail |
+|--------|------|--------|
+| feed_id | TEXT FK | References feeds.id (CASCADE) |
+| model | TEXT | Model identifier with `#vN` suffix (e.g. `zylonai/multilingual-e5-large:latest#v2`) |
+| dim | INTEGER | Vector dimension (1024 for e5-large) |
+| vector | TEXT | JSON float array (L2-normalized at write) |
+| created_at | TEXT | ISO datetime |
+| PK | | (feed_id, model) |
+
+**taste_scores** (centroid scoring output)
+
+| Column | Type | Detail |
+|--------|------|--------|
+| feed_id | TEXT PK FK | References feeds.id (CASCADE) |
+| model | TEXT | Same identifier as embeddings row |
+| score | REAL | `cos(item, relevant) - cos(item, not_relevant)` |
+| bucket | TEXT | `high_keep` / `auto_keep` / `borderline` / `auto_drop` |
+| scored_at | TEXT | ISO datetime |
 
 ### Views
 
@@ -412,6 +503,9 @@ runs (independent, execution log only)
 | WAL mode | Safe concurrent reads during writes | Slightly more disk usage | Default journal mode |
 | Overnight batch | Predictable costs, no real-time pressure | Stale data until next run | Webhook/streaming (complex, costly) |
 | launchd over cron | Native macOS, survives sleep/wake | macOS-only, `.plist` XML format | cron (simpler but less reliable on macOS) |
+| Ollama over API embeddings | Zero per-call cost, no data egress | Depends on Mac mini + Tailscale uptime | Voyage / OpenAI embeddings (cost + privacy) |
+| Centroid taste filter over kNN / LLM | O(1) scoring, works from few hundred labels | Can't model multi-modal taste cleanly | kNN (per-query cost), Sonnet-per-item ($50+/mo) |
+| E5 `query:` prefix + `#vN` model id | Matches model card usage; safe re-embedding on model upgrade | Extra string bookkeeping | Bare model name (breaks on upgrade) |
 
 ## Known Tech Debt
 
@@ -430,6 +524,9 @@ runs (independent, execution log only)
 - Config validation limited to `setup_wizard.py --validate` (no schema enforcement at runtime)
 - Cleanup only purges done/skipped/failed, not stale pending items
 - No diff-based review for health checks (re-processes unchanged data)
+- Taste thresholds are hardcoded constants in `cos/taste.py`; should live in `config.toml [taste]` section
+- Renderer does not yet consume `taste_scores.bucket`; daily brief surfaces all feeds equally rather than only `high_keep`
+- Feed-level audit is a manual script; should auto-warn in weekly digest when a feed stays pure-noise for N weeks
 
 ## Code Hotspots
 

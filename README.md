@@ -63,7 +63,8 @@ Three layers, each independent. Build one at a time. Each layer adds value on it
 - **Overnight classification**: Tasks are sorted while you sleep. No waiting for Opus when you sit down in the morning.
 - **Separate AI calendar**: Time blocks go to a dedicated "AI Plan" Google Calendar, not your main calendar. Overlay it visually, toggle it off when you want.
 - **Local-first**: Runs on your Mac via launchd. No cloud dependency for orchestration. Migration to a server is possible but not required.
-- **Semi-autonomous**: Creates drafts, tasks, and schedules automatically. Never sends emails. Critical decisions stay human.
+- **Partially autonomous**: Creates drafts, tasks, and schedules automatically. Never sends emails. Critical decisions stay human.
+- **Personal taste filter (Layer 1.7)**: Feed items are embedded and scored against a centroid built from user labels + Miniflux starred + vault URLs. Only `high_keep` tier surfaces to the daily brief; the rest goes to a weekly check-in queue. See [ADR-001](docs/adr/001-taste-filter.md).
 
 ## Data Sources
 
@@ -129,6 +130,34 @@ Reads pending items from `cos.db` and classifies each:
 | **SKIP** | Not today | Low priority, blocked, deadline far away |
 
 Classification is written back to `cos.db` and rendered into the Daily Note. When you wake up, the sorted plan is already waiting.
+
+### Layer 1.7: Taste Filter
+
+Runs inside `run_collect` after feeds land in `cos.db`. Learns what you actually care about from your own labels and implicit signals, scores every feed item, and tiers them for the brief.
+
+**Pipeline per item:**
+
+1. Language detected at ingestion (`langdetect`, tr/en kept, others parked).
+2. Embedded via Ollama `multilingual-e5-large` over Tailscale (Mac mini inference, zero API cost).
+3. Scored against two centroids: `cos(item, relevant) - cos(item, not_relevant)`.
+4. Placed in one of four buckets:
+
+| Bucket | Threshold | Where it goes |
+|--------|-----------|---------------|
+| `high_keep` | score >= +0.010 | Daily brief, top-of-fold |
+| `auto_keep` | score >= +0.002 | Weekly digest |
+| `borderline` | in between | Labeling queue (active learning) |
+| `auto_drop` | score <= -0.001 | Silently dropped |
+
+**Label sources, priority order:**
+
+1. Explicit labels via `cos taste label` or `cos taste weekly` (interactive terminal)
+2. Miniflux starred entries (nightly auto-sync)
+3. Vault URL cross-reference (periodic)
+
+Explicit `not_relevant` always beats any implicit positive signal.
+
+At 10.8k feed items and ~160 relevant / 85 not_relevant labels, the filter achieves 95% precision on `auto_keep` with 79% recall, auto-deciding ~90% of incoming volume. See [ADR-001](docs/adr/001-taste-filter.md) for details and alternatives considered.
 
 ### Layer 2: Morning Sweep
 
@@ -205,11 +234,14 @@ chief-of-staff/
 ├── cos/                        # Core library
 │   ├── config.py               # TOML config loader
 │   ├── db.py                   # SQLite access layer (inserts, queries, cleanup)
-│   └── log.py                  # Structured JSON logging
+│   ├── log.py                  # Structured JSON logging
+│   ├── language.py             # TR/EN detection for feed items
+│   └── taste.py                # Taste filter: embed, centroid, score
 ├── collectors/                 # Data collection + pipeline stages
 │   ├── calendar_collector.py   # Google Calendar MCP response parser
 │   ├── gmail_collector.py      # Gmail MCP response parser
 │   ├── feed_collector.py       # Miniflux REST API collector
+│   ├── feed_backfill.py        # One-shot paginated Miniflux backfill
 │   ├── task_collector.py       # Obsidian vault task scanner
 │   ├── health_collector.py     # Project health script runner
 │   └── health_scripts/
@@ -218,7 +250,13 @@ chief-of-staff/
 │   ├── radar_collector.py      # Opportunity Radar signal importer
 │   ├── classifier.py           # Classification export/import CLI
 │   ├── sweep.py                # Sweep export/record/complete CLI
-│   └── orchestrator.py         # Parallel sweep orchestrator (asyncio)
+│   ├── orchestrator.py         # Parallel sweep orchestrator (asyncio)
+│   ├── taste_label.py          # Interactive labeling TUI (active learning)
+│   ├── taste_weekly.py         # Weekly check-in (uncertainty + sanity + rescue)
+│   ├── taste_starred_sync.py   # Miniflux starred -> relevant auto-label
+│   ├── vault_label.py          # Vault URL scan -> relevant auto-label
+│   ├── taste_feed_audit.py     # Per-feed noise/signal audit
+│   └── taste_report.py         # Full-corpus metrics report
 ├── prompts/                    # Claude system prompts
 │   ├── collect.md              # MCP collection instructions
 │   ├── classifier.md           # Classification rules + decision framework
@@ -231,10 +269,11 @@ chief-of-staff/
 │       ├── task-agent.md       # Task completion notes
 │       └── feed-agent.md       # Feed summary + action items
 ├── tests/                      # pytest unit tests (7 modules)
-├── schema.sql                  # SQLite schema (9 tables, 5 views)
+├── schema.sql                  # SQLite schema
+├── migrations/                 # Schema migrations (taste filter, language, tiers)
 ├── renderer.py                 # SQLite -> Obsidian Daily Note
 ├── run.sh                      # Pipeline orchestrator (mutex, step routing)
-├── cos-brief.sh                # Unified CLI (brief, run, status, weekly, insights, cleanup)
+├── cos-brief.sh                # Unified CLI (brief, run, status, weekly, insights, cleanup, taste)
 ├── setup_wizard.py             # Interactive setup (config + db + launchd)
 ├── config.toml                 # User config (gitignored)
 └── config.example.toml         # Config template
@@ -386,6 +425,17 @@ cd /path/to/chief-of-staff
 ./cos-brief.sh status      # pipeline status
 ./cos-brief.sh weekly      # weekly digest
 ./cos-brief.sh brief       # interactive morning brief
+
+# Taste filter (Layer 1.7)
+./cos-brief.sh taste status    # label + bucket summary
+./cos-brief.sh taste weekly    # 3-section weekly check-in
+./cos-brief.sh taste label     # interactive labeling (--feed NAME to focus)
+./cos-brief.sh taste score     # embed new feeds + rescore all
+./cos-brief.sh taste rebuild   # recompute centroids + rescore
+./cos-brief.sh taste vault     # scan vault URLs -> auto-label relevant
+./cos-brief.sh taste starred   # sync Miniflux starred -> auto-label relevant
+./cos-brief.sh taste audit     # per-feed noise audit (unsubscribe candidates)
+./cos-brief.sh taste report    # full-corpus metrics
 ```
 
 ### Schedule Setup (optional)
@@ -481,6 +531,7 @@ This project was inspired by [Mimi Urchison's Claude Chief of Staff](https://git
 - [x] Cloudflare + Coolify platform health monitoring
 - [x] Setup wizard (interactive config + db + launchd)
 - [x] healthchecks.io monitoring for pipeline and sweep
+- [x] Layer 1.7: Personal taste filter (embeddings + active learning + implicit signals)
 - [ ] Phase 7: Day Block with AI Plan calendar
 - [ ] Vercel + Neon health collectors
 - [ ] Retry logic for failed Claude CLI calls

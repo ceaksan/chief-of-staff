@@ -81,10 +81,12 @@ CREATE TABLE IF NOT EXISTS feeds (
     published_at TEXT NOT NULL,
     reading_time INTEGER DEFAULT 0,
     tags        TEXT DEFAULT '[]',     -- json array
-    collected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    collected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    language    TEXT                   -- detected language (tr, en, other, und)
 );
 
 CREATE INDEX IF NOT EXISTS idx_feeds_published ON feeds(published_at);
+CREATE INDEX IF NOT EXISTS idx_feeds_language ON feeds(language);
 
 -- ============================================================
 -- Radar Entries (opportunity signals from Opportunity Radar)
