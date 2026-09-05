@@ -17,7 +17,7 @@ import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import httpx
 
@@ -26,11 +26,23 @@ from cos.log import get_logger
 
 logger = get_logger("taste")
 
-DEFAULT_MODEL = "zylonai/multilingual-e5-large:latest#v2"  # v2: uses "query:" prefix
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_HIGH_KEEP_THRESHOLD = 0.010  # ~p90 positive; surfaces in daily brief
-DEFAULT_KEEP_THRESHOLD = 0.002  # weekly digest tier
-DEFAULT_DROP_THRESHOLD = -0.001
+
+def _taste_config() -> dict:
+    """[taste] section from config.toml; empty dict if missing."""
+    try:
+        from cos.config import load_config
+
+        return load_config().get("taste", {})
+    except Exception:
+        return {}
+
+
+_cfg = _taste_config()
+DEFAULT_MODEL = _cfg.get("model", "zylonai/multilingual-e5-large:latest#v2")
+DEFAULT_OLLAMA_URL = _cfg.get("ollama_url", "http://localhost:11434")
+DEFAULT_HIGH_KEEP_THRESHOLD = _cfg.get("high_keep_threshold", 0.010)
+DEFAULT_KEEP_THRESHOLD = _cfg.get("keep_threshold", 0.002)
+DEFAULT_DROP_THRESHOLD = _cfg.get("drop_threshold", -0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +130,20 @@ def label_counts(db_path: Path | None = None) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_input(row: sqlite3.Row | dict) -> str:
+def _prepare_input(row: sqlite3.Row | dict, prefix: str = "query: ") -> str:
     """Build the text we embed. E5 requires a 'query:' prefix for both sides
-    of a symmetric similarity comparison, per the model card."""
+    of a symmetric similarity comparison, per the model card. Other models
+    (bge-m3, nomic) take the raw text."""
     title = (row["title"] or "").strip()
     content = (row["content"] or "").strip()
     if len(content) > 600:
         content = content[:600]
     body = f"{title}\n\n{content}".strip()
-    return f"query: {body}"
+    return f"{prefix}{body}"
+
+
+def _model_prefix(model_name: str) -> str:
+    return "query: " if "e5" in model_name.lower() else ""
 
 
 def embed_missing(
@@ -152,9 +169,10 @@ def embed_missing(
         return 0
 
     total = 0
+    prefix = _model_prefix(model_name)
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        texts = [_prepare_input(r) for r in batch]
+        texts = [_prepare_input(r, prefix) for r in batch]
         vectors = embed_texts(texts, model_name, base_url=base_url)
         dim = len(vectors[0]) if vectors else 0
         with connect(db_path) as conn:
