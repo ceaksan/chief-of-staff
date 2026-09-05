@@ -17,6 +17,8 @@ Commands:
   brief           Morning brief (same as no command)
   run [step]      Run pipeline
                     steps: full (default), collect, classify, sweep, sweep-seq, render
+  shortlist       What the classifier flagged as worth reading
+                    flags: --days N, --category yours, --all
   status          Pipeline status (last 24h)
   weekly          Weekly stats digest
   insights        Scheduling insights (30d patterns)
@@ -31,6 +33,7 @@ Examples:
   cos run          Run full pipeline
   cos run collect  Run collection only
   cos status       Check pipeline health
+  cos shortlist    See what came out of the last run
 HELP
 }
 
@@ -96,48 +99,41 @@ notify_failure() {
 }
 
 run_collect() {
-    local budget=$(read_cfg claude.collector_budget 2.00)
-    local model=$(read_cfg claude.collector_model sonnet)
-
-    echo "=== Step 1: Collection (Gmail + Calendar via MCP) ==="
-    claude -p "$(cat prompts/collect.md)" --max-budget-usd "$budget" --model "$model" --dangerously-skip-permissions 2>> logs/claude-collect.log
-    echo ""
-
-    echo "=== Step 2: Feed + Health + Task Collection ==="
+    # Gmail and Calendar collection was dropped: it existed only to let claude call
+    # MCP tools and hand the JSON to a parser, and the daily brief it fed was not
+    # being read. collectors/gmail_collector.py, collectors/calendar_collector.py
+    # and prompts/collect.md are unreferenced now.
+    echo "=== Step 1: Feed Collection ==="
     if python collectors/feed_collector.py; then
         hc_ping feed
     else
         hc_ping feed /fail
     fi
-    python collectors/health_collector.py 2>/dev/null || echo "  (health collector skipped - no scripts configured)"
-    python collectors/task_collector.py
+    # Reddit bypasses Miniflux: its host is blocked by Reddit, this machine is not.
+    python collectors/reddit_collector.py || echo "  (reddit collector failed - continuing)"
 
-    echo "=== Step 2b: Taste scoring (starred sync + embed + rescore) ==="
+    echo "=== Step 1b: Taste scoring (starred sync + embed + rescore) ==="
     python collectors/taste_starred_sync.py 2>> logs/taste.log || echo "  (starred sync failed)"
     python -c "
-from cos.taste import ensure_schema, embed_missing, build_centroids, score_all, bucket_counts
-from cos.db import connect, get_db_path
+from cos.taste import ensure_schema, embed_missing, bucket_counts
+from cos.taste_domains import score_all_domains
+from cos.db import get_db_path
 p = get_db_path()
 ensure_schema(p)
 n = embed_missing()
 print(f'embedded new: {n}')
-cent = build_centroids(db_path=p)
-if cent.n_relevant == 0:
-    print('  no relevant labels yet, skipping score')
-else:
-    with connect(p) as c: c.execute('DELETE FROM taste_scores')
-    scored = score_all(cent, db_path=p)
-    print(f'scored: {scored}  buckets: {bucket_counts(p)}')
+scored = score_all_domains(db_path=p)
+print(f'scored: {scored}  buckets: {bucket_counts(p)}')
 " 2>> logs/taste.log || echo "  (taste scoring failed, see logs/taste.log)"
     echo ""
 }
 
 run_classify() {
-    local budget=$(read_cfg claude.classifier_budget 1.50)
-    local model=$(read_cfg claude.classifier_model sonnet)
-
-    echo "=== Step 2: Classification ==="
-    claude -p "$(cat prompts/classifier.md)" --max-budget-usd "$budget" --model "$model" --dangerously-skip-permissions 2>> logs/claude-classifier.log
+    echo "=== Step 2: Classification (local) ==="
+    # Runs against Ollama on another machine and exits non-zero when that machine is
+    # asleep. Deliberate: a nightly silent fallback to a paid model is how a surprise
+    # bill happens, and the feed quota means the next run catches up anyway.
+    python collectors/local_classifier.py 2>> logs/classifier.log
     echo ""
 }
 
@@ -477,8 +473,10 @@ case "$CMD" in
         case "$STEP" in
             full)
                 hc_ping pipeline /start
-                if run_collect && run_classify && run_sweep && run_render; then
-                    echo "=== Overnight pipeline complete ==="
+                # Sweep and render belonged to the daily-brief lane, which is gone.
+                # They stay available as explicit subcommands.
+                if run_collect && run_classify; then
+                    echo "=== Pipeline complete ==="
                     run_status
                     hc_ping pipeline
                 else
@@ -498,6 +496,11 @@ case "$CMD" in
                 exit 1
                 ;;
         esac
+        ;;
+    shortlist)
+        source .venv/bin/activate
+        shift
+        python shortlist.py "$@"
         ;;
     status)
         source .venv/bin/activate

@@ -34,19 +34,40 @@ from cos.log import get_logger, log_with_data
 logger = get_logger("classifier")
 
 
+DEFAULT_MAX_ITEMS = 60
+DEFAULT_RECENT_DAYS = 3
+
+_FEED_SQL = """SELECT q.queue_id, q.domain_type, q.domain_id, q.priority, q.status,
+           q.content_hash, q.title, q.context, q.detail
+       FROM v_queue_enriched q
+       JOIN taste_scores ts ON ts.feed_id = q.domain_id
+       WHERE q.status = 'pending'
+         AND q.category IS NULL
+         AND q.domain_type = 'feed'
+         AND ts.bucket IN ('high_keep', 'auto_keep')
+         AND q.collected_at >= datetime('now', ?)
+       ORDER BY ts.score DESC, q.collected_at DESC
+       LIMIT ?"""
+
+
 def export_pending(config: dict) -> list[dict]:
-    """Export pending items that need classification."""
+    """Export the recent feed items worth classifying, best taste score first.
+
+    Feeds are the only lane left; email, calendar, task and health collection were
+    removed. They also arrive faster than the classifier can absorb, so the taste
+    layer makes the first cut: auto_drop never reaches the LLM at all.
+
+    The recency window matters as much as the score. Ranking the whole backlog by
+    score alone lets tens of thousands of older entries hold every slot forever, so
+    newly collected items never reach the classifier no matter how well they score.
+    """
     db_path = get_db_path(config)
+    cls_config = config.get("classification", {})
+    max_items = cls_config.get("max_items", DEFAULT_MAX_ITEMS)
+    recent_days = cls_config.get("recent_days", DEFAULT_RECENT_DAYS)
 
     with connect(db_path) as conn:
-        rows = conn.execute(
-            """SELECT queue_id, domain_type, domain_id, priority, status,
-                   content_hash, title, context, detail
-               FROM v_queue_enriched
-               WHERE status = 'pending'
-               AND category IS NULL
-               ORDER BY priority, collected_at"""
-        ).fetchall()
+        rows = conn.execute(_FEED_SQL, (f"-{recent_days} days", max_items)).fetchall()
 
     return [dict(row) for row in rows]
 

@@ -1,20 +1,34 @@
 # Chief of Staff
 
-A local-first AI assistant system that automates daily operational overhead for solo entrepreneurs. Built with Claude Code, Python, and SQLite.
+A local-first system that reads what you subscribe to, ranks it against your own
+writing, and tells you the few items worth your attention. Python, SQLite, Ollama.
 
-Chief of Staff collects information from your tools overnight, classifies your tasks, and dispatches AI agents to handle routine work, so you start each morning with decisions instead of assembly.
+> **Scope narrowed on 2026-09-05.** This started as an overnight briefing system:
+> Gmail and Calendar collection through MCP, task and health lanes, a Claude
+> classifier, an Obsidian daily note. That daily note went unread for months, and
+> Gmail and Calendar support has since arrived in Claude and most other assistants,
+> so collecting them here stopped earning its maintenance.
+>
+> What remains is the one lane that was actually working and unavailable elsewhere:
+> feeds in, personal-taste scoring, local classification, a shortlist out. No paid
+> API calls, no scheduler, run it when you want it.
+>
+> The previous scope is tagged
+> [`pre-1.0-daily-brief`](../../releases/tag/pre-1.0-daily-brief) if you were
+> running it. Nothing was deleted, only unwired.
 
 ## How It Works
 
 ```
-09:00  Claude collects data (MCP)  →  SQLite
-09:02  Renderer creates briefing   →  Obsidian Daily Note
-09:04  Classifier sorts tasks      →  dispatch / prep / yours / skip
-08:00  You review, approve, go     →  Subagents execute in parallel
-08:05  Day Block plans your time   →  "AI Plan" calendar
+cos run         Miniflux (+ Reddit)  →  SQLite
+                taste scoring         →  embeddings of your own published writing
+                local classifier      →  yours / prep / dispatch / skip
+cos shortlist   read what came out
 ```
 
-Three layers, each independent. Build one at a time. Each layer adds value on its own.
+Collection and scoring are deterministic. The only model call is the classifier,
+and it runs against your own Ollama host. If that host is asleep, the run says so
+and stops rather than falling back to something billable.
 
 ## Architecture
 
@@ -70,34 +84,34 @@ Three layers, each independent. Build one at a time. Each layer adds value on it
 
 ### Via MCP (Claude's built-in connectors)
 
-| Source | MCP Server | What it captures |
-|--------|-----------|-----------------|
-| Gmail | `claude.ai Gmail` | Actionable emails, Zoho ticket notifications. Priority P1-P4, duration estimate, sender. |
+| Source          | MCP Server                  | What it captures                                                                            |
+| --------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| Gmail           | `claude.ai Gmail`           | Actionable emails, Zoho ticket notifications. Priority P1-P4, duration estimate, sender.    |
 | Google Calendar | `claude.ai Google Calendar` | Today + tomorrow events across all calendars, Calendly slots flagged for prep, free blocks. |
 
 MCP handles authentication. Connect once via Claude Code (`/mcp`), no API keys to manage.
 
 ### Via Python (custom collectors)
 
-| Source | Script | What it captures |
-|--------|--------|-----------------|
-| Feeds | `collectors/feed_collector.py` | Unread RSS/Atom entries from Miniflux (self-hosted). Fetches via REST API, no MCP needed. |
-| Health | `collectors/health_collector.py` | Per-project status from existing monitoring scripts: up/down, error count, last deploy. |
-| Cloudflare | `collectors/health_scripts/cloudflare_health.py` | Workers error rate and request count (GraphQL), Pages deployment status (REST API). |
-| Coolify | `collectors/health_scripts/coolify_health.py` | Application, service, and database status via Coolify API (through Cloudflare Tunnel). |
-| Tasks | `collectors/task_collector.py` | Open tasks from Obsidian vault (Dataview checkbox format), synced to SQLite. |
+| Source     | Script                                           | What it captures                                                                          |
+| ---------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Feeds      | `collectors/feed_collector.py`                   | Unread RSS/Atom entries from Miniflux (self-hosted). Fetches via REST API, no MCP needed. |
+| Health     | `collectors/health_collector.py`                 | Per-project status from existing monitoring scripts: up/down, error count, last deploy.   |
+| Cloudflare | `collectors/health_scripts/cloudflare_health.py` | Workers error rate and request count (GraphQL), Pages deployment status (REST API).       |
+| Coolify    | `collectors/health_scripts/coolify_health.py`    | Application, service, and database status via Coolify API (through Cloudflare Tunnel).    |
+| Tasks      | `collectors/task_collector.py`                   | Open tasks from Obsidian vault (Dataview checkbox format), synced to SQLite.              |
 
 ### Multi-Calendar Support
 
 All calendars accessible through a single MCP connection via calendar sharing:
 
-| Calendar | Access | Purpose |
-|----------|--------|---------|
-| `user@example.com` | owner (primary) | Personal |
-| `shared-reader@example.com` | reader | Project A |
-| `other-reader@example.com` | reader | Project B |
-| `freebusy-reader@example.com` | freeBusyReader | Project C |
-| Luma | reader | Events |
+| Calendar                      | Access          | Purpose   |
+| ----------------------------- | --------------- | --------- |
+| `user@example.com`            | owner (primary) | Personal  |
+| `shared-reader@example.com`   | reader          | Project A |
+| `other-reader@example.com`    | reader          | Project B |
+| `freebusy-reader@example.com` | freeBusyReader  | Project C |
+| Luma                          | reader          | Events    |
 
 ## Layers
 
@@ -122,12 +136,12 @@ Runs after collection. Uses Claude Sonnet (`claude -p`, non-interactive) with a 
 
 Reads pending items from `cos.db` and classifies each:
 
-| Class | Meaning | Example |
-|-------|---------|---------|
-| **DISPATCH** | AI handles fully | Meeting confirmation reply, research task, note update |
-| **PREP** | AI does 80%, you finish | Complex email draft, error investigation summary + fix direction |
-| **YOURS** | Needs your brain | Strategy decisions, pricing, live meetings |
-| **SKIP** | Not today | Low priority, blocked, deadline far away |
+| Class        | Meaning                 | Example                                                          |
+| ------------ | ----------------------- | ---------------------------------------------------------------- |
+| **DISPATCH** | AI handles fully        | Meeting confirmation reply, research task, note update           |
+| **PREP**     | AI does 80%, you finish | Complex email draft, error investigation summary + fix direction |
+| **YOURS**    | Needs your brain        | Strategy decisions, pricing, live meetings                       |
+| **SKIP**     | Not today               | Low priority, blocked, deadline far away                         |
 
 Classification is written back to `cos.db` and rendered into the Daily Note. When you wake up, the sorted plan is already waiting.
 
@@ -142,12 +156,12 @@ Runs inside `run_collect` after feeds land in `cos.db`. Learns what you actually
 3. Scored against two centroids: `cos(item, relevant) - cos(item, not_relevant)`.
 4. Placed in one of four buckets:
 
-| Bucket | Threshold | Where it goes |
-|--------|-----------|---------------|
-| `high_keep` | score >= +0.010 | Daily brief, top-of-fold |
-| `auto_keep` | score >= +0.002 | Weekly digest |
-| `borderline` | in between | Labeling queue (active learning) |
-| `auto_drop` | score <= -0.001 | Silently dropped |
+| Bucket       | Threshold       | Where it goes                    |
+| ------------ | --------------- | -------------------------------- |
+| `high_keep`  | score >= +0.010 | Daily brief, top-of-fold         |
+| `auto_keep`  | score >= +0.002 | Weekly digest                    |
+| `borderline` | in between      | Labeling queue (active learning) |
+| `auto_drop`  | score <= -0.001 | Silently dropped                 |
 
 **Label sources, priority order:**
 
@@ -167,12 +181,12 @@ On-demand. You trigger it when ready. `collectors/orchestrator.py` dispatches do
 2. Shows the plan, you approve or adjust
 3. Fires subagents in parallel for approved DISPATCH + PREP tasks
 
-| Agent | Scope | Model | Budget | Safety |
-|-------|-------|-------|--------|--------|
-| **Calendar Agent** | Meeting prep notes | Sonnet | $0.50 | Read-only |
-| **Health Agent** | Error analysis + fix direction | Sonnet | $0.50 | No code patches |
-| **Task Agent** | Task completion notes, research | Sonnet | $0.50 | Scoped vault folders |
-| **Feed Agent** | Actionable feed summaries | Sonnet | $0.50 | Scoped vault folders |
+| Agent              | Scope                           | Model  | Budget | Safety               |
+| ------------------ | ------------------------------- | ------ | ------ | -------------------- |
+| **Calendar Agent** | Meeting prep notes              | Sonnet | $0.50  | Read-only            |
+| **Health Agent**   | Error analysis + fix direction  | Sonnet | $0.50  | No code patches      |
+| **Task Agent**     | Task completion notes, research | Sonnet | $0.50  | Scoped vault folders |
+| **Feed Agent**     | Actionable feed summaries       | Sonnet | $0.50  | Scoped vault folders |
 
 Completion report appends to the Daily Note. Task statuses update in `cos.db`.
 
@@ -198,32 +212,39 @@ The overnight process produces a ready-to-review briefing:
 # 2026-03-07
 
 ## Calendar
+
 - 10:00-11:00 Client X meeting (Calendly) - prep needed
 - 14:00-14:30 Deploy review
 - Free: 07:00-10:00, 11:00-14:00, 14:30-18:00
 
 ## Project Status
+
 - OK: cf:worker-1, cf:site-1, coolify:app-1, coolify:db-1
 - coolify:old-service: error (exited:unhealthy)
 
 ## Classified Tasks
 
 ### DISPATCH (AI handles)
+
 - [ ] Client A email reply - meeting confirmation (#email)
 - [ ] Blog post research - framework migration (#content)
 
 ### PREP (80% ready, you finish)
+
 - [ ] Client Y hosting migration reply - draft ready (#email)
 - [ ] project-d timeout - summary + fix direction (#dev)
 
 ### YOURS (your brain needed)
+
 - [ ] Client X meeting prep
 - [ ] project-e checkout flow fix (#dev)
 
 ### SKIP (not today)
+
 - [ ] project-d onboarding wizard - P3, deadline far
 
 ## Carried Over
+
 - [ ] [P2] Blog post publish - pending 2 days
 ```
 
@@ -472,15 +493,15 @@ alias cos-dayblock="claude -p ~/.chief-of-staff/prompts/dayblock.md --max-budget
 
 Build incrementally. Each phase adds standalone value.
 
-| Phase | What | Needs |
-|-------|------|-------|
-| 1 | SQLite schema + Calendar collection (MCP) + Renderer | Claude (Sonnet) |
-| 2 | Task Collector (Obsidian grep) | Python only |
-| 3 | Gmail collection (MCP) | Claude (Sonnet) |
-| 4 | Health Collector (integrate existing scripts) | Python only |
-| 5 | Overnight Classifier | Claude (Sonnet) |
-| 6 | Morning Sweep + parallel orchestrator + subagents | Claude (Opus) |
-| 7 | Day Block + AI Plan calendar | Claude (Sonnet) |
+| Phase | What                                                 | Needs           |
+| ----- | ---------------------------------------------------- | --------------- |
+| 1     | SQLite schema + Calendar collection (MCP) + Renderer | Claude (Sonnet) |
+| 2     | Task Collector (Obsidian grep)                       | Python only     |
+| 3     | Gmail collection (MCP)                               | Claude (Sonnet) |
+| 4     | Health Collector (integrate existing scripts)        | Python only     |
+| 5     | Overnight Classifier                                 | Claude (Sonnet) |
+| 6     | Morning Sweep + parallel orchestrator + subagents    | Claude (Opus)   |
+| 7     | Day Block + AI Plan calendar                         | Claude (Sonnet) |
 
 ## SQLite Schema
 
@@ -488,28 +509,28 @@ See `schema.sql` for the full 9-table schema with 5 views. The `architecture.md`
 
 ## Safety Model
 
-| Rule | Implementation |
-|------|---------------|
-| No auto-email | Emails are classified but no agent creates drafts. You handle email manually. |
-| Budget caps | Each Claude invocation has a `--max-budget-usd` flag. Per-agent caps prevent runaway spend. |
-| Mutex | `shlock` lockfile prevents parallel runs. |
-| Idempotency | `INSERT OR IGNORE` on unique source+id index. |
-| Dry run | `--dry-run` flag on Day Block previews without writing. |
-| Failure isolation | Source failure doesn't block others. Warning in Daily Note. |
-| Human approval | Morning Sweep shows classification before dispatching agents. |
-| Scoped writes | Content Agent writes to specific vault folders only. |
+| Rule              | Implementation                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| No auto-email     | Emails are classified but no agent creates drafts. You handle email manually.               |
+| Budget caps       | Each Claude invocation has a `--max-budget-usd` flag. Per-agent caps prevent runaway spend. |
+| Mutex             | `shlock` lockfile prevents parallel runs.                                                   |
+| Idempotency       | `INSERT OR IGNORE` on unique source+id index.                                               |
+| Dry run           | `--dry-run` flag on Day Block previews without writing.                                     |
+| Failure isolation | Source failure doesn't block others. Warning in Daily Note.                                 |
+| Human approval    | Morning Sweep shows classification before dispatching agents.                               |
+| Scoped writes     | Content Agent writes to specific vault folders only.                                        |
 
 ## Cost
 
-| Component | Cost |
-|-----------|------|
-| Claude Max subscription | $100/month (required) |
-| Overnight Collection + Classifier (Sonnet) | ~$1.00-3.00/day |
-| Morning Sweep: 4 domain agents (Sonnet, $0.50 each) | ~$1.00-2.00/day |
-| Day Block (Sonnet) | ~$0.25-1.00/day |
-| Google APIs | Free (MCP handles auth) |
-| Platform health checks (Cloudflare + Coolify APIs) | Free |
-| **Total beyond subscription** | **~$5-15/month** |
+| Component                                           | Cost                    |
+| --------------------------------------------------- | ----------------------- |
+| Claude Max subscription                             | $100/month (required)   |
+| Overnight Collection + Classifier (Sonnet)          | ~$1.00-3.00/day         |
+| Morning Sweep: 4 domain agents (Sonnet, $0.50 each) | ~$1.00-2.00/day         |
+| Day Block (Sonnet)                                  | ~$0.25-1.00/day         |
+| Google APIs                                         | Free (MCP handles auth) |
+| Platform health checks (Cloudflare + Coolify APIs)  | Free                    |
+| **Total beyond subscription**                       | **~$5-15/month**        |
 
 ## Inspiration
 

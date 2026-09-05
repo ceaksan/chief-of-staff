@@ -9,6 +9,7 @@ Usage:
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,24 +21,50 @@ from cos.log import get_logger, log_with_data
 
 logger = get_logger("feed_collector")
 
+# Under launchd the 09:00 run can start before DNS is ready, and the Miniflux host
+# resolves through sslip.io. A bare request then fails with Errno 8 and the day's
+# feeds are lost, so retry with backoff before giving up.
+RETRY_DELAYS = (5, 15, 45)
+
 try:
     import httpx
 
-    def _get(url: str, headers: dict, params: dict) -> dict:
+    def _get_once(url: str, headers: dict, params: dict) -> dict:
         resp = httpx.get(url, headers=headers, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
 
+    _TRANSIENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)
+
 except ImportError:
+    import urllib.error
     import urllib.request
 
-    def _get(url: str, headers: dict, params: dict) -> dict:
+    def _get_once(url: str, headers: dict, params: dict) -> dict:
         from urllib.parse import urlencode
 
         full_url = f"{url}?{urlencode(params)}"
         req = urllib.request.Request(full_url, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
+
+    _TRANSIENT = (urllib.error.URLError, TimeoutError)
+
+
+def _get(url: str, headers: dict, params: dict) -> dict:
+    for attempt, delay in enumerate(RETRY_DELAYS, start=1):
+        try:
+            return _get_once(url, headers, params)
+        except _TRANSIENT as e:
+            logger.warning(
+                "Miniflux unreachable (attempt %d/%d): %s. Retrying in %ds",
+                attempt,
+                len(RETRY_DELAYS) + 1,
+                e,
+                delay,
+            )
+            time.sleep(delay)
+    return _get_once(url, headers, params)
 
 
 def estimate_priority(reading_time: int) -> str:

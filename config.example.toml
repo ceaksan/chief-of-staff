@@ -30,10 +30,29 @@ dayblock_model = "sonnet"
 collector_time = "06:00"
 
 [classification]
+# How many items go to the classifier per run
+max_items = 60
+# Only classify items collected within this window. Without it the oldest entries
+# in the backlog hold every slot and newly collected ones never get classified.
+recent_days = 3
 # Keywords that always classify as YOURS (human required)
 force_yours = ["pricing", "strategy", "contract", "negotiation", "proposal"]
 # Keywords that always classify as DISPATCH (AI handles fully)
 force_dispatch = ["meeting confirmation", "calendar update", "subscription renewal"]
+
+[local_llm]
+# Ollama endpoint used for classification. Falls back to [taste] ollama_url.
+# There is no paid fallback: if this host is down, classification is skipped.
+host = "http://127.0.0.1:11434"
+model = "qwen3.5:35b-a3b-q8_0"
+timeout = 120
+
+[reddit]
+# Optional. Only needed when Reddit blocks the Miniflux host and subreddits have
+# to be fetched from the machine running the pipeline instead. Subscribing to the
+# subreddit feeds in Miniflux is the simpler path when it works.
+subreddits = ["GoogleAnalytics", "GoogleTagManager", "analytics", "PPC"]
+per_subreddit = 25
 
 [dayblock]
 # Time preferences
